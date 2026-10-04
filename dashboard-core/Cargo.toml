@@ -1,0 +1,24 @@
+[package]
+name = "dashboard-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "project-dashboard 核心引擎：会话扫描 / 项目采集 / 跨机同步（Rust 全栈 M1.5+）"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+dirs.workspace = true
+jsonschema.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+sha2.workspace = true
+walkdir.workspace = true
+
+# 仅 Unix：超时时 killpg 杀子进程组（连带 git fork 的 ssh / credential helper 孙进程）。
+# libc 已在 Cargo.lock 作为间接依赖存在（0.2.x），此处提升为直接依赖，无新增编译面；
+# Windows 进程树终止（Job Object）留接力待办，故不在 Windows target 引入。
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

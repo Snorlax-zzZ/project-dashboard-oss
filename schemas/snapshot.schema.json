@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://project-dashboard/schemas/snapshot.schema.json",
+  "title": "Snapshot",
+  "description": "machines/<id>/snapshot.json：本机当前态覆盖写。Schema Allowlist，additionalProperties:false。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "machine_id", "updated_at", "projects"],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "machine_id": { "type": "string", "minLength": 1 },
+    "hostname": {
+      "type": "string",
+      "description": "当次真实主机名，纯展示字段、不参与匹配。machine_id 不变而此值变了即可断定同一台机改了名（macOS 局域网撞名会自动加后缀）。非 required：老 snapshot 无此字段仍须校验通过。"
+    },
+    "updated_at": { "type": "string", "format": "date-time" },
+    "projects": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/SnapshotProject" }
+    }
+  },
+  "$defs": {
+    "SnapshotProject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "project_id",
+        "name",
+        "branch",
+        "head",
+        "upstream",
+        "ahead",
+        "behind",
+        "dirty",
+        "untracked",
+        "last_commit_at",
+        "last_fs_change_at",
+        "collected_at",
+        "progress",
+        "dangerous_state"
+      ],
+      "properties": {
+        "project_id": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            }
+          ],
+          "description": "null 表示 UUID 未 commit，不参与跨机聚合"
+        },
+        "name": { "type": "string", "minLength": 1 },
+        "branch": { "type": ["string", "null"] },
+        "head": { "type": ["string", "null"], "description": "短 SHA（默认 7 位，仅供 UI 展示；跨机严格相等判定用 head_full）" },
+        "head_full": {
+          "type": ["string", "null"],
+          "description": "v4.3 新增：HEAD 完整 40 位 sha。老 snapshot 反序列化后为 null，此时 aggregate 走 Insufficient 分支。",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "upstream": { "type": ["string", "null"] },
+        "ahead": { "type": ["integer", "null"], "minimum": 0 },
+        "behind": { "type": ["integer", "null"], "minimum": 0 },
+        "dirty": { "type": "integer", "minimum": 0 },
+        "untracked": { "type": "integer", "minimum": 0 },
+        "last_commit_at": { "type": ["string", "null"], "format": "date-time" },
+        "last_fs_change_at": { "type": ["string", "null"], "format": "date-time" },
+        "collected_at": { "type": "string", "format": "date-time" },
+        "progress": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["done", "total", "next"],
+              "properties": {
+                "done": { "type": "integer", "minimum": 0 },
+                "total": { "type": "integer", "minimum": 0 },
+                "next": { "type": "string" }
+              }
+            }
+          ]
+        },
+        "dangerous_state": {
+          "type": ["string", "null"],
+          "enum": [null, "rebase", "merge", "cherry-pick", "detached"]
+        },
+        "recent_commits": {
+          "description": "v4.3 新增：`git log -n 20` 最近提交历史，三态语义：null=不可用信号（老 snapshot / 采集失败）；[]=有效空仓（unborn repo）；非空数组=有效证据。",
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "array",
+              "maxItems": 20,
+              "items": { "$ref": "#/$defs/CommitEntry" }
+            }
+          ]
+        }
+      }
+    },
+    "CommitEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sha_full", "subject", "author", "time"],
+      "properties": {
+        "sha_full": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$",
+          "description": "完整 40 位 sha（UI 展示时缩写到 7 位）"
+        },
+        "subject": {
+          "type": "string",
+          "description": "commit subject，采集时截断到 40 字（隐私边界）"
+        },
+        "author": { "type": "string" },
+        "time": { "type": "string", "format": "date-time" },
+        "files": {
+          "description": "v4.3+：仅最近 5 条带文件级改动（git show --numstat）；null=未采集/不可用。",
+          "oneOf": [
+            { "type": "null" },
+            { "type": "array", "items": { "$ref": "#/$defs/FileChange" } }
+          ]
+        }
+      }
+    },
+    "FileChange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "additions", "deletions"],
+      "properties": {
+        "path": { "type": "string" },
+        "additions": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "增加行数；二进制文件为 null"
+        },
+        "deletions": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "删除行数；二进制文件为 null"
+        }
+      }
+    }
+  }
+}

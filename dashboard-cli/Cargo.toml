@@ -1,0 +1,17 @@
+[package]
+name = "dashboard-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "project-dashboard CLI 二进制：hook / 排障 / 隐私事故备胎（用户日常走 Tauri App）"
+
+[[bin]]
+name = "fleet"
+path = "src/main.rs"
+
+[dependencies]
+dashboard-core = { path = "../dashboard-core" }
+serde_json.workspace = true
+dirs.workspace = true
+uuid.workspace = true

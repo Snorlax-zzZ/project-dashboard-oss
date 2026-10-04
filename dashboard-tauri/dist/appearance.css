@@ -1,0 +1,250 @@
+/* 已确认的浅 16 / 深 19；正式界面外观，全部资源随安装包本地提供。 */
+:root {
+  --bg-0: #f4f5ec;
+  --bg-1: #fffffa;
+  --bg-2: #e9ecd8;
+  --surface: #fffffa;
+  --border: #daddc5;
+  --text-0: #373b27;
+  --text-1: #373b27;
+  --text-mute: #666b50;
+  --accent: #626c31;
+  --primary: #626c31;
+  --on-accent: #ffffff;
+  --brand-teal: #626c31;
+  --brand-cyan: #626c31;
+  --brand-sky: #626c31;
+  --brand-mint: #626c31;
+  --well: #e9ecd8;
+  --muted: #666b50;
+  --danger: #a42e36;
+  --warn: #895917;
+  --ok: #26704e;
+  --radius: 16px;
+  --radius-sm: 10px;
+  --radius-lg: 20px;
+  --page-space: 26px;
+  --card-space: 20px;
+  --sidebar-width: 236px;
+  --row-height: 48px;
+  --shadow-glass: none;
+  --icon-stroke: 1.7;
+  --ui-edit: url("./ui-icons/edit.svg");
+  --ui-delete: url("./ui-icons/delete.svg");
+  --ui-copy: url("./ui-icons/copy.svg");
+  --ui-plus: url("./ui-icons/plus.svg");
+  --ui-close: url("./ui-icons/close.svg");
+  --ui-star: url("./ui-icons/star.svg");
+  --ui-star-filled: url("./ui-icons/star-filled.svg");
+  --ui-check: url("./ui-icons/check.svg");
+}
+html[data-mode="dark"] {
+  --bg-0: #171923;
+  --bg-1: #222532;
+  --bg-2: #2e3244;
+  --surface: #222532;
+  --border: #41465e;
+  --text-0: #e9eaf6;
+  --text-1: #e9eaf6;
+  --text-mute: #aaafc7;
+  --accent: #b7b5ff;
+  --primary: #b7b5ff;
+  --on-accent: #272642;
+  --brand-teal: #b7b5ff;
+  --brand-cyan: #b7b5ff;
+  --brand-sky: #b7b5ff;
+  --brand-mint: #b7b5ff;
+  --well: #2e3244;
+  --muted: #aaafc7;
+  --danger: #ffaaa4;
+  --warn: #edc680;
+  --ok: #86d3ae;
+  --shadow-glass: 0 4px 14px #00000018;
+}
+/* 两套配色共用组件尺寸；布局只在这里定义一次。 */
+html { color-scheme: light; }
+html[data-mode="dark"] { color-scheme: dark; }
+body { background: var(--bg-0); font-size: 13px; -webkit-font-smoothing: antialiased; }
+.app { grid-template-columns: var(--sidebar-width) minmax(0, 1fr); grid-template-rows: 56px minmax(0, 1fr); }
+.sidebar, .topbar, .card, .pagination, .drawer, .modal { backdrop-filter: none; -webkit-backdrop-filter: none; }
+.sidebar { min-height: 0; background: var(--bg-0); padding: 24px 14px; border: 0; }
+.logo { font-size: 12px; letter-spacing: -.3px; gap: 10px; padding: 4px 8px 30px; white-space: nowrap; flex: none; }
+.logo svg { width: 30px; height: 30px; flex: none; }
+.nav-item { border: 1px solid transparent; border-radius: 24px; font-size: 13px; min-height: 48px; padding: 11px 16px; margin-bottom: 6px; font-weight: 550; flex: none; }
+.nav-item svg { stroke-width: 1.7; width: 18px; height: 18px; flex: none; }
+.nav-item:hover { background: var(--well); color: var(--text-0); }
+.nav-item.active { border-color: var(--border); background: var(--surface); color: var(--accent); font-weight: 650; box-shadow: 3px 3px 8px #0000000b; }
+html[data-mode="dark"] .nav-item.active { background: var(--well); box-shadow: none; }
+.sidebar-version { color: var(--text-mute); font-size: 10px; padding-top: 14px; border-top: 1px solid var(--border); margin-top: 12px; flex: none; }
+.topbar { background: var(--bg-0); padding: 0 var(--page-space); border: 0; }
+.topbar .status { font-size: 12px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topbar .actions { flex: none; }
+.topbar .status:not(.stale):not(.error)::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); margin-right: 8px; vertical-align: 1px; }
+.main { padding: var(--page-space); min-height: 0; display: flex; flex-direction: column; }
+.main > .banner { flex: none; }
+.page { min-width: 0; flex: none; }
+.page-title { font-size: 24px; line-height: 1.4; letter-spacing: -.6px; font-weight: 650; margin: 0 0 22px; flex: none; }
+.card { min-width: 0; padding: var(--card-space); margin-bottom: 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: 5px 5px 14px #00000008; }
+html[data-mode="dark"] .card { background: transparent; border-color: transparent; box-shadow: none; }
+.btn { font-family: inherit; min-height: 44px; font-size: 12px; line-height: 1.4; border-radius: 12px; background: var(--well); border-color: var(--border); color: var(--text-0); padding: 0 14px; justify-content: center; white-space: nowrap; flex: none; }
+.btn svg { width: 16px; height: 16px; flex: none; }
+.btn:hover { background: color-mix(in srgb, var(--accent) 11%, var(--surface)); }
+.btn.primary, .page-btn.active { background: var(--accent); color: var(--on-accent); box-shadow: none; border-color: transparent; }
+.btn.primary:hover { filter: brightness(.96); background: var(--accent); }
+.btn.ghost { background: var(--surface); }
+.btn.ghost:hover { background: var(--well); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.btn.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); background: transparent; }
+.btn.danger:hover { background: color-mix(in srgb, var(--danger) 7%, var(--surface)); }
+.input { min-width: 0; min-height: 44px; padding: 0 14px; background: var(--bg-0); border-color: var(--border); border-radius: 12px; color: var(--text-0); font-family: inherit; font-size: 13px; }
+.input::placeholder { color: var(--text-mute); opacity: .85; }
+.form-row > .input { flex: none; width: 100%; }
+.toolbar { gap: 8px; margin-bottom: 14px; min-width: 0; flex: none; }
+.hint { overflow-wrap: anywhere; }
+/* 只有当前页表格滚动，分页独占一行，避免 sticky 覆盖列表。 */
+#page-sessions { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+#page-sessions > .card { display: flex; flex-direction: column; flex: 1; min-height: 0; margin-bottom: 0; }
+#session-source-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+#page-sessions .table-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.session-source-tabs { display: flex; flex-wrap: wrap; flex: none; gap: 4px; width: fit-content; max-width: 100%; border: 1px solid var(--border); border-radius: 14px; padding: 4px; margin-bottom: 16px; background: var(--bg-0); }
+html[data-mode="dark"] .session-source-tabs { background: var(--well); }
+.session-source-tab { border-radius: 10px; min-height: 44px; font-weight: 550; padding: 0 18px; background: transparent; }
+.session-source-tab.active { background: var(--surface); color: var(--accent); box-shadow: 0 1px 4px #00000010; }
+html[data-mode="dark"] .session-source-tab.active { background: var(--accent); color: var(--on-accent); box-shadow: none; }
+.session-source-tab:hover:not(.active) { background: var(--surface); color: var(--text-0); }
+table.list { font-size: 12.5px; border-collapse: separate; border-spacing: 0; }
+table.list th { background: var(--bg-0); font-size: 11px; font-weight: 600; height: 40px; padding: 8px 12px; }
+table.list td { height: 48px; padding: 10px 12px; line-height: 20px; }
+#session-table th { position: sticky; top: 0; z-index: 1; }
+#session-table td:first-child { padding: 2px 8px; }
+#session-table th:first-child { text-align: center; }
+#session-table td { white-space: nowrap; }
+.table-scroll-controls { display: flex; flex: none; justify-content: flex-end; align-items: center; gap: 6px; margin-bottom: 6px; color: var(--text-mute); font-size: 11px; }
+.table-scroll-controls[hidden] { display: none; }
+.table-scroll-controls .btn { width: 36px; min-height: 32px; padding: 0; }
+.table-scroll-controls [aria-disabled="true"], .session-marks [aria-disabled="true"] { opacity: .45; cursor: default; }
+.table-scroll:focus-visible { outline-offset: -2px; }
+table.list th:first-child { border-radius: 10px 0 0 0; }
+table.list th:last-child { border-radius: 0 10px 0 0; }
+table.list tr:hover td { background: color-mix(in srgb, var(--accent) 6%, var(--surface)); }
+table.list tr.selected td { background: color-mix(in srgb, var(--accent) 12%, var(--surface)); }
+table.list tr.selected td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+/* 陈旧信息以文字降色标记，不降低整行透明度而损失可读性。 */
+table.list tr.stale td { opacity: 1; color: var(--text-mute); }
+table.list tr.stale .chip-val { color: var(--text-mute); }
+table.list code { font-size: 11px; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+/* 横向滚动路径和仓库地址时，行操作仍可见；两枚按钮不拆成上下两行。 */
+#project-table th:last-child, #project-table td:last-child:not([colspan]) { position: sticky; right: 0; z-index: 1; background: var(--surface); box-shadow: -1px 0 var(--border); white-space: nowrap; }
+html[data-mode="dark"] #project-table th:last-child, html[data-mode="dark"] #project-table td:last-child:not([colspan]) { background: var(--bg-0); }
+#project-table td:last-child:not([colspan]) { padding-block: 2px; }
+#project-table td:last-child .btn + .btn { margin-left: 4px; }
+.btn-favorite { display: inline-flex; align-items: center; justify-content: center; vertical-align: middle; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 10px; background: transparent; color: var(--text-mute); cursor: pointer; }
+.btn-favorite:hover { background: var(--well); }
+.btn-favorite[aria-pressed="true"] { color: var(--accent); }
+.favorite-icon { display: block; width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.btn-favorite[aria-pressed="true"] .favorite-icon { fill: currentColor; }
+.pagination { position: static; flex: none; margin: 12px -20px -20px; padding: 12px 20px; background: var(--bg-0); border-top: 1px solid var(--border); border-radius: 0 0 16px 16px; gap: 8px 16px; }
+.pagination-info { white-space: nowrap; }
+.pagination-right { flex-wrap: wrap; justify-content: flex-end; gap: 8px 12px; margin-left: auto; max-width: 100%; }
+.pagination-size { flex: none; white-space: nowrap; }
+.pagination-size select { color-scheme: inherit; background: var(--surface); color: var(--text-0); min-height: 36px; border-color: var(--border); }
+.pagination-size select option { background: var(--surface); color: var(--text-0); }
+/* WKWebView 的原生 menulist 会忽略 min-height；保留 select 语义，显式绘制控件外观。 */
+select.input, .pagination-size select { -webkit-appearance: none; appearance: none; padding-right: 32px; background-image: linear-gradient(45deg, transparent 50%, var(--text-mute) 50%), linear-gradient(135deg, var(--text-mute) 50%, transparent 50%); background-position: calc(100% - 17px) 50%, calc(100% - 12px) 50%; background-size: 5px 5px; background-repeat: no-repeat; }
+select.input { height: 44px; }
+.pagination-size select { height: 36px; min-width: 64px; }
+.pagination-pages { flex-wrap: wrap; gap: 4px; }
+.page-btn { height: 36px; min-width: 36px; border-radius: 10px; flex: none; }
+.page-btn:hover:not(.disabled):not(.active) { background: var(--well); }
+.badge { border-radius: 16px; font-size: 10.5px; padding: 1px 7px; line-height: 20px; white-space: nowrap; }
+.badge.ok { background: color-mix(in srgb, var(--ok) 7%, var(--surface)); border-color: color-mix(in srgb, var(--ok) 25%, var(--border)); }
+.badge.warn, .chip.warn { background: color-mix(in srgb, var(--warn) 7%, var(--surface)); border-color: color-mix(in srgb, var(--warn) 28%, var(--border)); }
+.badge.err { background: color-mix(in srgb, var(--danger) 7%, var(--surface)); border-color: color-mix(in srgb, var(--danger) 28%, var(--border)); }
+.badge.info { background: var(--well); border-color: var(--border); color: var(--accent); }
+.badge.mute { background: var(--well); }
+.banner { font-family: inherit; font-size: 12px; line-height: 1.6; padding: 10px 12px; overflow-wrap: anywhere; }
+.banner.info { background: color-mix(in srgb, var(--accent) 6%, var(--surface)); border-color: color-mix(in srgb, var(--accent) 24%, var(--border)); color: var(--accent); }
+.banner.warn { background: color-mix(in srgb, var(--warn) 6%, var(--surface)); border-color: color-mix(in srgb, var(--warn) 28%, var(--border)); color: var(--warn); }
+.banner.err { background: color-mix(in srgb, var(--danger) 6%, var(--surface)); border-color: color-mix(in srgb, var(--danger) 28%, var(--border)); color: var(--danger); }
+.chip { background: var(--well); border-color: transparent; border-radius: 16px; }
+.chip .chip-key { max-width: 100px; }
+/* 宽屏并排查看；小窗口抽屉覆盖主区，避免把表格和分页挤成一列。 */
+.drawer { width: min(var(--drawer-width, 480px), calc(100vw - var(--sidebar-width) - 560px)); background: var(--surface); border-color: var(--border); box-shadow: -12px 0 40px #0000000b; }
+body.drawer-open .main { margin-right: min(var(--drawer-width, 480px), calc(100vw - var(--sidebar-width) - 560px)); }
+.drawer-head { background: var(--bg-0); min-height: 60px; padding: 14px 18px; gap: 12px; }
+#drawer-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#drawer-close { width: 44px; padding: 0; }
+.drawer-extras { border-color: var(--border); overflow-wrap: anywhere; }
+.drawer-extras .form-row { display: flex; flex-direction: column; gap: 6px; }
+.drawer-scroll { min-height: 0; }
+.drawer-resizer:hover { background: var(--accent); opacity: .3; }
+.dialog, .machine-block, .repowiki-node-card { background: var(--well); border-color: var(--border); }
+.machine-block { border-radius: 14px; padding: 16px; }
+.machine-block.stale { opacity: 1; }
+.machine-block.stale .machine-block-title { color: var(--text-mute); }
+.machine-block-head { border-bottom-style: solid; flex-wrap: wrap; }
+.modal-backdrop { background: #0e17274d; backdrop-filter: none; }
+.modal { background: var(--surface); box-shadow: 0 24px 72px #00000024; border-color: var(--border); border-radius: 20px; }
+.modal .hint { font-size: 11px; line-height: 1.55; }
+.modal .actions { position: static; background: var(--surface); padding-top: 14px; border-top: 1px solid var(--border); }
+.msg-body { background: var(--well); border: 1px solid var(--border); border-radius: 14px; padding: 16px; color: var(--text-0); }
+.msg-user .msg-body { background: color-mix(in srgb, var(--accent) 7%, var(--surface)); border: 1px solid var(--border); border-radius: 14px; padding: 16px; }
+.msg-body pre, .repowiki-markdown pre { background: var(--well); }
+.msg-role { font-size: 13px; }
+.repowiki-nav-item:hover:not(:disabled), .repowiki-nav-toggle:hover { background: var(--well); }
+.repowiki-nav-item { border-radius: 12px; }
+.repowiki-nav-item.active { background: var(--well); border-color: var(--border); color: var(--accent); }
+.repowiki-markdown blockquote { background: var(--well); }
+.repowiki-article { min-height: 420px; overflow: hidden; }
+.repowiki-article-head { flex-wrap: wrap; }
+.repowiki-article-head > div { min-width: 0; overflow-wrap: anywhere; }
+.repowiki-markdown { overflow-x: auto; }
+.repowiki-toolbar select { min-width: 0; }
+#page-settings .form-row { max-width: 900px; padding: 12px 0 20px; border-bottom: 1px solid var(--border); }
+#page-settings > .card { max-width: 1120px; }
+#page-settings .toolbar { margin: 12px 0 22px; flex-wrap: wrap; }
+label:has(> input[type="checkbox"]) { display: flex; align-items: center; gap: 8px; }
+input[type="checkbox"] { accent-color: var(--accent); width: 20px; height: 20px; flex: none; margin: 0; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+* { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+/* 图标使用本地 SVG 蒙版；文字仍来自实际按钮，不以伪元素替代可访问名称。 */
+.btn[data-action="edit"]::before, .btn[data-action="delete"]::before, #btn-add-project::before, #drawer-close::before, [data-copy-sid]::before { content: ""; display: block; width: 14px; height: 14px; background: currentColor; mask: var(--ui-edit) center/contain no-repeat; -webkit-mask: var(--ui-edit) center/contain no-repeat; flex: none; }
+.btn[data-action="delete"]::before { mask-image: var(--ui-delete); -webkit-mask-image: var(--ui-delete); }
+#btn-add-project::before { mask-image: var(--ui-plus); -webkit-mask-image: var(--ui-plus); }
+#drawer-close::before { mask-image: var(--ui-close); -webkit-mask-image: var(--ui-close); }
+[data-copy-sid]::before { mask-image: var(--ui-copy); -webkit-mask-image: var(--ui-copy); }
+.visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+.sidebar-tools { margin-top: auto; display: flex; align-items: center; gap: 10px; padding: 18px 8px 4px; flex: none; }
+.sidebar-tools .sidebar-icon-button { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 44px; height: 44px; min-height: 44px; padding: 0; margin: 0; border: 1px solid var(--border); border-radius: 50%; background: var(--surface); color: var(--text-mute); box-shadow: none; cursor: pointer; }
+.sidebar-tools .sidebar-icon-button svg { width: 19px; height: 19px; padding: 0; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; }
+.sidebar-tools .sidebar-icon-button:hover { background: var(--well); color: var(--accent); }
+.sidebar-tools .nav-item.active { color: var(--accent); border-color: var(--accent); background: var(--well); }
+.appearance-label { font-size: 11px; color: var(--text-mute); user-select: none; }
+html[data-mode="dark"] .theme-icon-moon, html:not([data-mode="dark"]) .theme-icon-sun { display: none; }
+@media (max-width: 1280px) {
+  .drawer { width: min(var(--drawer-width, 480px), calc(100vw - 80px)); box-shadow: -16px 0 40px #00000030; }
+  body.drawer-open .main { margin-right: 0; }
+}
+@media (max-width: 1000px) {
+  :root { --sidebar-width: 208px; --page-space: 18px; }
+  .logo { gap: 6px; padding-inline: 2px; }
+  .nav-item { padding-inline: 12px; }
+  .topbar .status { font-size: 11px; }
+  .repowiki-reader-grid { grid-template-columns: 1fr; }
+  .repowiki-page-nav { position: static; max-height: 240px; }
+}
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+
+/* 会话偏好保留表格结构；两枚标记按钮共用固定高度，分页仍独立占位。 */
+.session-visibility-control { flex: none; }
+#session-visibility { width: 112px; min-height: 44px; }
+.session-marks { display: inline-flex; align-items: center; vertical-align: middle; gap: 2px; }
+.session-marks-heading { width: 90px; }
+.btn-session-visibility { display: inline-flex; align-items: center; justify-content: center; vertical-align: middle; flex: none; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 10px; background: transparent; color: var(--text-mute); cursor: pointer; }
+.btn-session-visibility:hover { background: var(--well); }
+.session-visibility-icon { width: 18px; height: 18px; display: block; background: currentColor; mask: var(--session-visibility-image) center/contain no-repeat; -webkit-mask: var(--session-visibility-image) center/contain no-repeat; }
+.session-visibility-icon.hide { --session-visibility-image: url("./ui-icons/hide.svg"); }
+.session-visibility-icon.show { --session-visibility-image: url("./ui-icons/show.svg"); }
+.session-marks button:disabled { opacity: .45; cursor: wait; }
+.session-notice { flex: none; margin: 0 0 8px; padding: 8px 12px; color: var(--danger); background: var(--well); border-radius: 8px; font-size: 12px; overflow-wrap: anywhere; }
+.confirm-msg { overflow-wrap: anywhere; }

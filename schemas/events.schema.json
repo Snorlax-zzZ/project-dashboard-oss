@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://project-dashboard/schemas/events.schema.json",
+  "title": "Event",
+  "description": "machines/<id>/events.ndjson 单行事件。仅 snapshot 变化时追加，不做保留策略清理。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["ts", "trigger", "project_id", "action", "from_head", "to_head", "dirty", "untracked", "dangerous_state"],
+  "properties": {
+    "ts": { "type": "string", "format": "date-time" },
+    "trigger": {
+      "type": "string",
+      "enum": ["hook", "cron", "app-open", "tick", "manual"]
+    },
+    "project_id": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        }
+      ]
+    },
+    "action": {
+      "type": "string",
+      "enum": ["commit", "dirty-change", "head-change", "collect"]
+    },
+    "from_head": { "type": ["string", "null"] },
+    "to_head": { "type": ["string", "null"] },
+    "dirty": { "type": "integer", "minimum": 0 },
+    "untracked": { "type": "integer", "minimum": 0 },
+    "dangerous_state": {
+      "type": ["string", "null"],
+      "enum": [null, "rebase", "merge", "cherry-pick", "detached"]
+    },
+    "manual": {
+      "type": "boolean",
+      "description": "手动同步兜底标记，仅 trigger=manual 时出现"
+    },
+    "git_remote_mismatch": {
+      "type": "object",
+      "description": "v4.2 Decision 15 防伪校验：采集时跑 git remote get-url origin 归一化后与 registry git_url + git_url_aliases 全不匹配。snapshot 依然写入，此字段仅诊断。",
+      "additionalProperties": false,
+      "required": ["expected", "actual"],
+      "properties": {
+        "expected": { "type": "string" },
+        "actual": { "type": "string" }
+      }
+    },
+    "git_remote_failed": {
+      "type": "string",
+      "description": "v4.2 Decision 15：git remote get-url origin 非 0 退出或 stdout 为空（无 origin / 非 git 仓 / 命令失败）。字段值为诊断原因。"
+    }
+  }
+}

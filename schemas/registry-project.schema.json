@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://project-dashboard/schemas/registry-project.schema.json",
+  "title": "RegistryProject",
+  "description": "每项目一文件 registry/projects/<uuid>.yaml（跨机共享）。sync 状态永远为 true。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "project_id",
+    "name",
+    "git_url",
+    "sync",
+    "machines",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "project_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "description": "UUID v4 小写形式"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "git_url": {
+      "type": "string",
+      "pattern": "^https://[a-z0-9.-]+(:[0-9]+)?(/[a-z0-9._-]+){2,}$",
+      "description": "归一化后的 HTTPS URL（primary），小写 owner/repo，不含 .git 后缀"
+    },
+    "git_url_aliases": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^https://[a-z0-9.-]+(:[0-9]+)?(/[a-z0-9._-]+){2,}$"
+      },
+      "default": [],
+      "description": "v4.2 引入 · URL 变更历史别名。仓库改名/换组织/换主机后，把老 URL 追加到这里，反查时命中兜底。字段可选，缺失视为 []"
+    },
+    "sync": {
+      "type": "boolean",
+      "const": true,
+      "description": "registry 只承载 sync:true，false 项目由 local.yaml 承载"
+    },
+    "machines": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1,
+        "description": "该 machine 上项目根路径（可含 ~/ 或 $HOME/）"
+      },
+      "minProperties": 1
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

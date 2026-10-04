@@ -1,0 +1,55 @@
+# Rust 编译产物
+target/
+**/*.rs.bk
+
+# IDE / 编辑器
+.idea/
+.vscode/settings.json
+*.iml
+
+# OS 元数据
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 日志 / 临时
+*.log
+log/
+tmp/
+*.tmp
+*.swp
+*.swo
+
+# 敏感 / 私密（预防性，本仓库不该出现这些）
+.env
+.env.*
+!.env.example
+secrets/
+credentials/
+*.key
+*.pem
+*.p12
+*.pfx
+
+# 本地辅助工具状态的忽略规则；不包含这些目录中的状态数据
+.omc/
+.omo/
+
+# Node（若将来引入前端打包器）
+node_modules/
+package-lock.json
+.pnpm-store/
+
+# Python 临时文件与虚拟环境
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Tauri build artifacts（走 target/，已含）
+dashboard-tauri/gen/
+
+# 从审查后的 SVG / 依赖生成，不进入源码仓
+/dashboard-tauri/icons/*
+!/dashboard-tauri/icons/app-icon.svg
+/dashboard-tauri/resources/

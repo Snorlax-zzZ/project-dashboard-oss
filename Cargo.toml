@@ -1,0 +1,25 @@
+[workspace]
+resolver = "2"
+members = [
+    "dashboard-core",
+    "dashboard-cli",
+    "dashboard-tauri",
+]
+
+[workspace.package]
+version = "0.2.14"
+edition = "2021"
+authors = ["project-dashboard contributors"]
+license = "MIT"
+repository = "https://github.com/Snorlax-zzZ/project-dashboard-oss"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+serde_yaml = "0.9"
+dirs = "5"
+jsonschema = { version = "0.28", default-features = false }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+sha2 = "0.10"
+walkdir = "2"

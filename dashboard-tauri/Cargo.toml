@@ -1,0 +1,23 @@
+# Tauri 桌面 App 壳，与 core / CLI 共用工作区版本。
+[package]
+name = "dashboard-tauri"
+version.workspace = true
+edition = "2021"
+license = "MIT"
+description = "project-dashboard Tauri 桌面 App 壳（M2 §5，Rust backend + vanilla 前端）"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+dashboard-core = { path = "../dashboard-core" }
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+dirs = "5"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

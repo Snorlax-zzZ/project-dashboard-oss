@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/schema.json",
   "productName": "project-dashboard",
-  "version": "0.2.14",
+  "version": "0.2.20",
   "identifier": "io.github.snorlaxzzz.projectdashboard",
   "build": {
     "beforeDevCommand": "",

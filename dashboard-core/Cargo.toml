@@ -6,6 +6,14 @@ license.workspace = true
 repository.workspace = true
 description = "project-dashboard 核心引擎：会话扫描 / 项目采集 / 跨机同步（Rust 全栈 M1.5+）"
 
+[features]
+process-fixture = []
+
+[[bin]]
+name = "process-fixture"
+path = "tests/fixtures/process_fixture.rs"
+required-features = ["process-fixture"]
+
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
@@ -16,9 +24,14 @@ chrono.workspace = true
 uuid.workspace = true
 sha2.workspace = true
 walkdir.workspace = true
+rusqlite = { version = "0.40.2", features = ["bundled", "limits", "hooks"] }
+zstd = { version = "0.14.3", default-features = false }
 
 # 仅 Unix：超时时 killpg 杀子进程组（连带 git fork 的 ssh / credential helper 孙进程）。
 # libc 已在 Cargo.lock 作为间接依赖存在（0.2.x），此处提升为直接依赖，无新增编译面；
-# Windows 进程树终止（Job Object）留接力待办，故不在 Windows target 引入。
+# Windows 由独立的 windows-sys Job 执行器负责进程树生命周期。
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_System_Pipes"] }

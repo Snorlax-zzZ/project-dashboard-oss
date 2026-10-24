@@ -152,6 +152,7 @@ fn search_favorites_and_empty_last_page_use_filtered_results() {
     let page = list_visible_paged(&input, &s, Some("topic 0"), 1, 10, Visibility::Visible).unwrap();
     assert_eq!(page.total, 2);
     assert_eq!(page.items[0].session_id, "id-0");
+    assert!(page.items.iter().all(|m| m.source == "codex"));
     for i in 0..3 {
         s.set_hidden("codex", &format!("id-{i}"), true).unwrap();
     }

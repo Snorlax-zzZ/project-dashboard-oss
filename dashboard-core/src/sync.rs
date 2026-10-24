@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
+#[cfg(not(windows))]
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
@@ -430,7 +432,7 @@ impl DashboardStateRepo {
         // 目录一律不删，避免 git_clone 被误用于非空 root 时误删用户既有数据（虽然生产路径只在
         // NeedsInit=root 空/不存在 时才调它，这里做函数自证的防御）。
         let root_existed_before = self.root.exists();
-        match run_git(None, &["clone", remote, &self.root.to_string_lossy()]) {
+        match run_git(None, &["clone", "--", remote, &self.root.to_string_lossy()]) {
             Ok(_) => Ok(()),
             Err(e) => {
                 if !root_existed_before && self.root.exists() {
@@ -537,7 +539,10 @@ impl DashboardStateRepo {
         let new_hash = Self::hash_of(&snapshot);
         if !force && prev_hash == new_hash {
             // spec: snapshot 未变时跳过一切 —— 不落盘、不写 events、不 commit、不 push
-            return Ok(SyncCycleResult { changed: false, pushed: false });
+            return Ok(SyncCycleResult {
+                changed: false,
+                pushed: false,
+            });
         }
         // land 段：落盘 snapshot + 追加 events
         self.write_snapshot(&snapshot)?;
@@ -546,7 +551,10 @@ impl DashboardStateRepo {
         }
         if !push {
             // land-only：不碰 git，本次变更留待后续 push=true 的 sync_cycle 一起带走
-            return Ok(SyncCycleResult { changed: true, pushed: false });
+            return Ok(SyncCycleResult {
+                changed: true,
+                pushed: false,
+            });
         }
         // git 段：add + commit（失败向上抛 Err）；push 单独 catch（失败不抛，返回 pushed: false）
         self.git_add_all()?;
@@ -558,7 +566,10 @@ impl DashboardStateRepo {
         );
         self.git_commit(&msg)?;
         let pushed = self.git_push().is_ok();
-        Ok(SyncCycleResult { changed: true, pushed })
+        Ok(SyncCycleResult {
+            changed: true,
+            pushed,
+        })
     }
 
     /// 隐私事故标记：`.emergency-purge-<ts>` 空文件写入仓根 + push。
@@ -659,9 +670,7 @@ pub fn resolve_status(
     configured_remote: Option<&str>,
     remote_cleared: bool,
 ) -> StateRepoStatus {
-    let configured = configured_remote
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
+    let configured = configured_remote.map(str::trim).filter(|s| !s.is_empty());
     if observed.has_git {
         // 决策 3：有 .git 但非合法 dashboard-state 结构（无 registry/projects）→ InvalidStructure，
         // 在 origin 匹配前拦（结构比 origin 更根本），挡「填错地址指向普通仓」被出机 / CRUD 污染。
@@ -727,6 +736,7 @@ const GIT_TIMEOUT: Duration = Duration::from_secs(120);
 ///
 /// stdin 置空：无 TTY 环境下 git 遇凭证 / passphrase 提示不再读父 stdin 而 hang。
 /// Unix 上把子进程放进独立进程组，超时用 killpg 杀整组——见 kill_process_tree。
+#[cfg(not(windows))]
 fn run_command_with_timeout(
     mut cmd: Command,
     timeout: Duration,
@@ -781,7 +791,7 @@ fn run_command_with_timeout(
 
 /// 超时终止子进程。Unix：子进程经 `process_group(0)` 自成组长，`killpg(pgid, SIGKILL)` 杀整组
 /// （含 git fork 的 ssh / credential helper 孙进程），保证 drain 线程收到管道 EOF、join 不 hang。
-/// 其他平台（Windows）暂只杀直接子进程——进程树终止（Job Object）留接力待办。
+/// 其他非 Unix、非 Windows 平台只终止直接子进程；Windows 使用独立 Job 执行器。
 #[cfg(unix)]
 fn kill_process_tree(child: &mut std::process::Child) {
     // process_group(0) 后 pgid == 子进程 pid；向该进程组发 SIGKILL。
@@ -794,9 +804,37 @@ fn kill_process_tree(child: &mut std::process::Child) {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn kill_process_tree(child: &mut std::process::Child) {
     let _ = child.kill();
+}
+
+#[cfg(windows)]
+fn run_command_with_timeout(
+    cmd: Command,
+    timeout: Duration,
+) -> Result<std::process::Output, SyncError> {
+    use crate::windows_process::{self, Error, Limits};
+    fn convert(error: Error) -> SyncError {
+        match error {
+            Error::Timeout => SyncError::Timeout,
+            Error::Spawn(error) => SyncError::Io(error),
+            _ => SyncError::ProcessControlFailed,
+        }
+    }
+    let executable = windows_process::find_executable(cmd.get_program()).map_err(convert)?;
+    let args: Vec<_> = cmd.get_args().map(std::ffi::OsStr::to_os_string).collect();
+    windows_process::run(
+        &executable,
+        &args,
+        cmd.get_current_dir(),
+        Limits {
+            timeout,
+            stdout: None,
+            stderr: None,
+        },
+    )
+    .map_err(convert)
 }
 
 /// 用 shell out `git` 做仓操作 —— v4.1 定死走命令，不引 `git2`；带 `GIT_TIMEOUT` 超时兜底。
@@ -821,14 +859,22 @@ pub enum SyncError {
     Io(std::io::Error),
     Json(serde_json::Error),
     Schema(SchemaError),
-    GitFailed { args: Vec<String>, stderr: String },
+    GitFailed {
+        args: Vec<String>,
+        stderr: String,
+    },
     /// P0-3：读到的 snapshot.json 内 machine_id 与本机不符（文件错位 / 污染）。
-    MachineIdMismatch { expected: String, found: String },
+    MachineIdMismatch {
+        expected: String,
+        found: String,
+    },
     /// P0-5：取 repo-global 同步锁超时（另一个采集 / 同步进程正持锁）。
     LockBusy,
     /// Q2-D1：git 子进程执行超时被主动终止（凭证弹窗遮挡 / 网络挂起）。
     /// 产生此变体的执行层 timeout 实现单列（涉及改子进程执行方式），本变体先入契约供分类映射。
     Timeout,
+    /// Windows 进程树收容/清理无法确认；不得以仅杀直接子进程降级。
+    ProcessControlFailed,
 }
 
 impl std::fmt::Display for SyncError {
@@ -852,6 +898,10 @@ impl std::fmt::Display for SyncError {
             Self::Timeout => {
                 write!(f, "git 操作超时被终止（可能凭证弹窗遮挡或网络挂起）")
             }
+            Self::ProcessControlFailed => write!(
+                f,
+                "[PROCESS_CONTROL_FAILED] 无法安全执行或清理Git进程，请稍后重试"
+            ),
         }
     }
 }
@@ -1010,7 +1060,7 @@ mod tests {
     use super::*;
 
     // ===== Q2-D1 timeout 执行层 =====
-    // #[cfg(unix)]：用 sleep/sh/yes 驱动；Windows 侧走同一份 std API 代码路径（try_wait/kill 跨平台）。
+    // Unix 使用 sleep/sh/yes；Windows 的真实进程载荷在 process-fixture 集成测试中覆盖。
 
     #[cfg(unix)]
     #[test]
@@ -1020,7 +1070,10 @@ mod tests {
         cmd.arg("10");
         let start = Instant::now();
         let r = run_command_with_timeout(cmd, Duration::from_millis(200));
-        assert!(matches!(r, Err(SyncError::Timeout)), "hang 命令应超时返回 Timeout");
+        assert!(
+            matches!(r, Err(SyncError::Timeout)),
+            "hang 命令应超时返回 Timeout"
+        );
         assert!(
             start.elapsed() < Duration::from_secs(3),
             "应被 kill 而非等命令自然结束（10s）"
@@ -1072,7 +1125,10 @@ mod tests {
         cmd.args(["-c", "sleep 30 | cat"]);
         let start = Instant::now();
         let r = run_command_with_timeout(cmd, Duration::from_millis(300));
-        assert!(matches!(r, Err(SyncError::Timeout)), "hang 命令应超时返回 Timeout");
+        assert!(
+            matches!(r, Err(SyncError::Timeout)),
+            "hang 命令应超时返回 Timeout"
+        );
         assert!(
             start.elapsed() < Duration::from_secs(5),
             "killpg 杀整组后应在上限内返回，而非被孙进程持管道拖住（实测 {:?}）",
@@ -1114,15 +1170,14 @@ mod tests {
     // Q2-B：resolve_status 纯函数封闭四态 + Conflict 两 reason + 存量兼容判定。
     #[test]
     fn resolve_status_states() {
-        let obs = |exists: bool, empty: bool, git: bool, registry: bool, origin: Option<&str>| {
-            Observed {
+        let obs =
+            |exists: bool, empty: bool, git: bool, registry: bool, origin: Option<&str>| Observed {
                 root_exists: exists,
                 root_empty: empty,
                 has_git: git,
                 has_registry: registry,
                 origin: origin.map(|s| s.to_string()),
-            }
-        };
+            };
         let remote = "git@host:team/ds.git";
 
         // 未配 remote 且无 .git（root 不存在）→ Unconfigured
@@ -1143,7 +1198,11 @@ mod tests {
 
         // 有 .git + 合法结构 + origin==配置值 → Ready
         assert_eq!(
-            resolve_status(&obs(true, false, true, true, Some(remote)), Some(remote), false),
+            resolve_status(
+                &obs(true, false, true, true, Some(remote)),
+                Some(remote),
+                false
+            ),
             StateRepoStatus::Ready
         );
 
@@ -1177,14 +1236,22 @@ mod tests {
 
         // 有 .git + 合法结构、配了 remote + 已清空标记：Some(remote) 分支短路不看 cleared → Ready
         assert_eq!(
-            resolve_status(&obs(true, false, true, true, Some(remote)), Some(remote), true),
+            resolve_status(
+                &obs(true, false, true, true, Some(remote)),
+                Some(remote),
+                true
+            ),
             StateRepoStatus::Ready
         );
 
         // 决策 3：有 .git 但**无 registry/projects**（普通仓 / 填错地址）→ Conflict(InvalidStructure)，
         // 在 origin 匹配前拦（配 remote 与否、origin 是否匹配都不影响，结构非法优先）
         assert_eq!(
-            resolve_status(&obs(true, false, true, false, Some(remote)), Some(remote), false),
+            resolve_status(
+                &obs(true, false, true, false, Some(remote)),
+                Some(remote),
+                false
+            ),
             StateRepoStatus::Conflict(ConflictReason::InvalidStructure)
         );
         assert_eq!(

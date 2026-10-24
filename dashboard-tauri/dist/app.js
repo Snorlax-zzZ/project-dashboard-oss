@@ -20,8 +20,18 @@ const REPOWIKI_NODE_ID = /^[0-9a-f]{64}$/;
 // 给的是错命令；② 路径全是占位符，复制出来也跑不了；③ 过期时只给 `status`，那只是再查一遍。
 // 该跑什么由 RepoWiki CLI 自己负责，Dashboard 猜命令只会误导。
 
+// 仅开发者定义的产品字面量进入词典；业务插值不做二次翻译。
+function uiText(source, ...values) {
+  const locale = typeof window !== 'undefined' && window.DashboardI18n;
+  return locale ? locale.t(source, ...values) : source.replace(/\{(\d+)\}/g, (token, i) => i < values.length ? String(values[i] ?? '') : token);
+}
+function uiTemplate(strings, ...values) {
+  const source = strings.reduce((text, part, i) => text + part + (i < values.length ? '{' + i + '}' : ''), '');
+  return uiText(source, ...values);
+}
+
 // -------- State --------
-const SESSION_SOURCE_IDS = Object.freeze(['claude-cli', 'codex', 'pi', 'grok']);
+const SESSION_SOURCE_IDS = Object.freeze(['claude-cli', 'codex', 'pi', 'grok', 'opencode', 'antigravity', 'dsh', 'zcode', 'gemini-cli']);
 
 // 页签显示名。来源 id 是后端 allowlist 里的稳定标识，展示名跟它解耦（如 'claude-cli' → 'Claude Code'）。
 const SESSION_SOURCE_LABELS = Object.freeze({
@@ -29,7 +39,66 @@ const SESSION_SOURCE_LABELS = Object.freeze({
   codex: 'Codex',
   pi: 'pi',
   grok: 'Grok',
+  opencode: 'OpenCode',
+  antigravity: 'Antigravity CLI',
+  dsh: 'DSH',
+  zcode: 'ZCode',
+  'gemini-cli': 'Gemini CLI',
 });
+const SESSION_SOURCE_HINTS = Object.freeze({
+  opencode: '搜索标题、目录与会话 ID；点击后读取近期对话。',
+  antigravity: '支持标题与摘要检索；暂不支持完整对话。',
+  dsh: '搜索已缓存的标题与文本片段；复制会话 ID 后在 DSH 中查找。',
+  zcode: '搜索标题、目录与会话 ID；复制会话 ID 后在 ZCode 中查找。',
+  'gemini-cli': '可浏览已保存的历史；复制会话 ID 后在 Gemini CLI 中查找。',
+});
+const SESSION_SOURCE_PREFERENCES_KEY = 'pd-session-sources-v1';
+
+function normalizeSessionSourcePreferences(value) {
+  const valid = value?.version === 1 && Array.isArray(value.order) && Array.isArray(value.hidden);
+  const order = [...new Set((valid ? value.order : []).filter(id => SESSION_SOURCE_IDS.includes(id)))];
+  for (const id of SESSION_SOURCE_IDS) if (!order.includes(id)) order.push(id);
+  const hidden = valid ? order.filter(id => value.hidden.includes(id)) : [];
+  // 配置损坏或旧版本留下全隐藏值时，恢复第一个入口，管理按钮始终可达。
+  if (hidden.length === order.length) hidden.splice(hidden.indexOf(order[0]), 1);
+  return { version: 1, order, hidden };
+}
+
+function visibleSessionSources(preferences) {
+  return preferences.order.filter(id => SESSION_SOURCE_IDS.includes(id) && !preferences.hidden.includes(id));
+}
+
+function readSessionSourcePreferences(storage) {
+  try {
+    const raw = (storage || window.localStorage).getItem(SESSION_SOURCE_PREFERENCES_KEY);
+    return normalizeSessionSourcePreferences(raw ? JSON.parse(raw) : null);
+  } catch (_) { return normalizeSessionSourcePreferences(null); }
+}
+
+function persistSessionSourcePreferences(preferences, storage) {
+  if (!visibleSessionSources(preferences).length) throw new Error(uiText('至少保留一个来源'));
+  const normalized = normalizeSessionSourcePreferences(preferences);
+  (storage || window.localStorage).setItem(SESSION_SOURCE_PREFERENCES_KEY, JSON.stringify(normalized));
+  return normalized;
+}
+
+function moveSessionSource(preferences, id, direction) {
+  const order = [...preferences.order], index = order.indexOf(id), next = index + direction;
+  if (index >= 0 && next >= 0 && next < order.length && Math.abs(direction) === 1) {
+    [order[index], order[next]] = [order[next], order[index]];
+  }
+  return {version:1, order, hidden:[...preferences.hidden]};
+}
+
+function reorderSessionSource(preferences, id, target, position) {
+  const result = {version:1, order:[...preferences.order], hidden:[...preferences.hidden]};
+  if (id === target || !result.order.includes(id) || !result.order.includes(target) || !['before','after'].includes(position)) return result;
+  result.order = result.order.filter(value => value !== id);
+  result.order.splice(result.order.indexOf(target) + (position === 'after' ? 1 : 0), 0, id);
+  return result;
+}
+
+const initialSessionSourcePreferences = readSessionSourcePreferences();
 
 function createSessionView() {
   return { items: [], query: '', page: 1, pageSize: 20, total: 0, error: '', loading: false, visibility: 'visible', notice: '', needsRefresh: false, pendingHidden: new Set(), pendingFavorites: new Set() };
@@ -43,11 +112,14 @@ function createSessionViews() {
 let state = {
   activeTab: 'sessions',
   // Session Board 页面级来源页签。每个来源独立保留搜索 / 分页 / 结果，切换不串状态。
-  sessionSource: 'claude-cli',
+  sessionSource: visibleSessionSources(initialSessionSourcePreferences)[0],
+  sessionSourcePreferences: initialSessionSourcePreferences,
   sessionViews: createSessionViews(),
   sessionListRequestSerial: Object.fromEntries(SESSION_SOURCE_IDS.map(id => [id, 0])),
   sessionDetailRequestSerial: 0,
   sessionDetailKey: '',
+  sessionPresentation: null,
+  fleetPresentation: null,
   sessionHideConfirmationOpen: false,
   // v4.2 §16.6：`pending` 通道已删除；UUID 权威在 dashboard-state registry。
   projects: { shared: [], private: [] },
@@ -67,6 +139,7 @@ let state = {
   // machine_id 由 backend `get_local_context` 提供（审计对账 P0-D，2026-07-06）
   //  —— 前端不再硬编码 'DESKTOP-DEMO01'，跨机器时前端渲染跟随本机 machine_id。
   machineId: '',
+  knownMachines: [],
   /// 身份取不到时的原因（后端给的面向用户文案）。非空即代表本机处于「身份不可用」硬故障态。
   machineIdError: '',
   /// 当次真实主机名，展示用（与 machineId 分离，后者不随主机名漂移）。
@@ -88,6 +161,12 @@ let state = {
     pathIndex: new Map(),          // Map<规范化 path, page_id>：正文里的相对 .md 链接靠它回查页面
     homePageId: '',                // 根页面 id（parent_page_id 为 null 的那一页）
     expandedPageIds: new Set(),    // 树形导航当前展开的父节点集合（默认只展开第一层）
+    navQuery: '',
+    documentReady: false,
+    findQuery: '',
+    findMatches: [],
+    findIndex: -1,
+    findTruncated: false,
   },
 };
 
@@ -98,7 +177,10 @@ const STALE_THRESHOLD_MS = 24 * 3600 * 1000;
 
 // -------- Bootstrap --------
 if (typeof document !== 'undefined') {
+  document.addEventListener('dashboard:language-changed', refreshInterfaceLanguage);
   document.addEventListener('DOMContentLoaded', async () => {
+    renderSessionSourceTabs();
+    bindSessionSourceManager();
     bindNav();
     bindSyncButtons();
     bindProjectForm();
@@ -119,6 +201,7 @@ function bindDrawerClose() {
   if (closeBtn) closeBtn.addEventListener('click', closeDrawer);
   document.addEventListener('keydown', (e) => {
     if (document.getElementById('confirm-backdrop')?.classList.contains('open') ||
+        document.getElementById('session-source-manager')?.open ||
         document.getElementById('project-modal-backdrop')?.classList.contains('open')) return;
     if (e.key === 'Escape' && drawer && drawer.classList.contains('open')) {
       closeDrawer();
@@ -179,6 +262,9 @@ async function bootstrapContext() {
     state.machineId = '';
     state.machineIdError = String(e && e.message ? e.message : e);
     renderMachineIdentityFailure(state.machineIdError);
+  } finally {
+    const machine = document.getElementById('sidebar-machine-id');
+    if (machine) machine.textContent = state.machineId || uiText('身份不可用');
   }
 }
 
@@ -188,7 +274,7 @@ function renderMachineIdentityFailure(detail) {
   const banner = document.getElementById('machine-identity-banner');
   if (banner) {
     banner.style.display = '';
-    banner.textContent = `无法确定本机身份：${detail || '未知原因'} —— 同步与项目登记已停用，避免写入错误身份。`;
+    banner.textContent = uiTemplate`无法确定本机身份：${detail || uiText('未知原因')} —— 同步与项目登记已停用，避免写入错误身份。`;
   }
   // 只禁「会写云端」的两个入口：手动同步与新增项目。只读浏览照常可用。
   for (const id of ['btn-sync', 'btn-add-project']) {
@@ -199,16 +285,16 @@ function renderMachineIdentityFailure(detail) {
 
 // -------- Nav & Tab routing --------
 function bindTableScrollControls() {
-  for (const [id, label] of [['session-table', '会话列表'], ['fleet-table', 'Fleet 列表'], ['project-table', '项目列表']]) {
+  for (const [id, label] of [['session-table', uiText('会话列表')], ['fleet-table', uiText('Fleet 列表')], ['project-table', uiText('项目列表')]]) {
     const table = document.getElementById(id);
     const viewport = table.parentElement;
     viewport.id = `${id}-viewport`;
     viewport.setAttribute('role', 'region');
-    viewport.setAttribute('aria-label', `${label}，可用左右方向键滚动列`);
+    viewport.setAttribute('aria-label', uiTemplate`${label}，可用左右方向键滚动列`);
     const controls = document.createElement('div');
     controls.className = 'table-scroll-controls';
     controls.hidden = true;
-    controls.innerHTML = `<span>左右滚动查看更多列</span>
+    controls.innerHTML = uiTemplate`<span>左右滚动查看更多列</span>
       <button type="button" class="btn ghost" data-scroll="left" aria-label="向左滚动${label}" aria-controls="${viewport.id}">←</button>
       <button type="button" class="btn ghost" data-scroll="right" aria-label="向右滚动${label}" aria-controls="${viewport.id}">→</button>`;
     viewport.before(controls);
@@ -250,18 +336,31 @@ function bindNav() {
     el.addEventListener('click', () => switchTab(el.dataset.tab));
   });
   const sourceTabs = [...document.querySelectorAll('.session-source-tab')];
-  sourceTabs.forEach((el, index) => {
+  const sourceViewport = document.querySelector('.session-source-tabs');
+  const previousSource = document.getElementById('session-source-previous');
+  const nextSource = document.getElementById('session-source-next');
+  if (sourceViewport && previousSource && nextSource) {
+    previousSource.addEventListener('click', () => sourceViewport.scrollBy({left:-sourceViewport.clientWidth * 0.75, behavior:'smooth'}));
+    nextSource.addEventListener('click', () => sourceViewport.scrollBy({left:sourceViewport.clientWidth * 0.75, behavior:'smooth'}));
+    sourceViewport.addEventListener('scroll', updateSessionSourceScroll, {passive:true});
+    if (typeof ResizeObserver !== 'undefined') new ResizeObserver(updateSessionSourceScroll).observe(sourceViewport);
+    updateSessionSourceScroll();
+  }
+
+  sourceTabs.forEach((el) => {
     el.addEventListener('click', () => switchSessionSource(el.dataset.sessionSource));
     el.addEventListener('keydown', (event) => {
+      const visibleTabs = [...sourceViewport.querySelectorAll('.session-source-tab')].filter(tab => !tab.hidden);
+      const index = visibleTabs.indexOf(el);
       let target = index;
-      if (event.key === 'ArrowRight') target = (index + 1) % sourceTabs.length;
-      else if (event.key === 'ArrowLeft') target = (index - 1 + sourceTabs.length) % sourceTabs.length;
+      if (event.key === 'ArrowRight') target = (index + 1) % visibleTabs.length;
+      else if (event.key === 'ArrowLeft') target = (index - 1 + visibleTabs.length) % visibleTabs.length;
       else if (event.key === 'Home') target = 0;
-      else if (event.key === 'End') target = sourceTabs.length - 1;
+      else if (event.key === 'End') target = visibleTabs.length - 1;
       else return;
       event.preventDefault();
-      sourceTabs[target].focus();
-      switchSessionSource(sourceTabs[target].dataset.sessionSource);
+      visibleTabs[target].focus();
+      switchSessionSource(visibleTabs[target].dataset.sessionSource);
     });
   });
   // 搜索：debounce 300ms 后重新拉第 1 页
@@ -297,28 +396,266 @@ function activeSessionView() {
   return state.sessionViews[state.sessionSource];
 }
 
+// 仅保留产品提示的渲染函数，语言切换时可更新已发生的结果，不重复执行操作。
+function setSessionNotice(view, render) {
+  view.noticeRenderer = render;
+  view.notice = render();
+}
+function setSyncError(status, render) {
+  status.errorRenderer = render;
+  status.error = render();
+}
+
 function sessionSourceLabel(source) {
   return SESSION_SOURCE_LABELS[source] || source;
 }
 
+function updateSessionSourceScroll() {
+  const viewport = document.querySelector('.session-source-tabs');
+  const previous = document.getElementById('session-source-previous');
+  const next = document.getElementById('session-source-next');
+  if (!viewport || !previous || !next) return;
+  previous.disabled = viewport.scrollLeft <= 1;
+  next.disabled = viewport.scrollLeft + viewport.clientWidth >= viewport.scrollWidth - 1;
+}
+
+function renderSessionSourceTabs() {
+  const preferences = state.sessionSourcePreferences;
+  const viewport = document.querySelector('.session-source-tabs');
+  const tabs = [...document.querySelectorAll('.session-source-tab')];
+  for (const id of preferences.order) {
+    const tab = tabs.find(el => el.dataset.sessionSource === id);
+    if (!tab) continue;
+    const active = id === state.sessionSource && !preferences.hidden.includes(id);
+    tab.hidden = preferences.hidden.includes(id);
+    tab.classList.toggle('active', active);
+    tab.setAttribute('aria-selected', String(active));
+    tab.tabIndex = active ? 0 : -1;
+  }
+  const ordered = preferences.order.map(id => tabs.find(el => el.dataset.sessionSource === id)).filter(Boolean);
+  // 无排序变化时不搬动 DOM 节点，避免键盘切换把当前 Tab 的焦点移出页面。
+  if (viewport && ordered.some((tab,index) => viewport.children[index] !== tab)) {
+    for (const tab of ordered) viewport.appendChild(tab);
+  }
+  const activeTab = tabs.find(el => el.dataset.sessionSource === state.sessionSource && !el.hidden);
+  if (activeTab) {
+    document.getElementById('session-source-panel')?.setAttribute('aria-labelledby', activeTab.id);
+    activeTab.scrollIntoView?.({block:'nearest', inline:'nearest'});
+  }
+  const hint = document.getElementById('session-source-hint');
+  if (hint) {
+    hint.textContent = uiText(SESSION_SOURCE_HINTS[state.sessionSource] || '');
+    hint.classList.toggle('hidden', !hint.textContent);
+  }
+  const input = document.getElementById('session-query');
+  if (input) input.placeholder = ['opencode','zcode'].includes(state.sessionSource)
+    ? uiText('搜索标题 / cwd / 会话 ID') : uiText('搜索标题 / cwd / 缓存文本 / 会话 ID');
+  const summary = document.getElementById('session-source-settings-summary');
+  if (summary) summary.textContent = uiTemplate`已显示 ${visibleSessionSources(preferences).length} / ${SESSION_SOURCE_IDS.length} 个工具来源`;
+  updateSessionSourceScroll();
+}
+
+let sessionSourceDraft = null;
+let sessionSourceManagerTrigger = null;
+let sessionSourceDrag = null;
+
+function clearSessionSourceDropMarker() {
+  document.querySelectorAll('#session-source-options .drop-before, #session-source-options .drop-after')
+    .forEach(row => row.classList.remove('drop-before','drop-after'));
+}
+
+function clearSessionSourceDrag() {
+  const drag = sessionSourceDrag;
+  sessionSourceDrag = null;
+  if (drag?.frame) window.cancelAnimationFrame(drag.frame);
+  if (drag?.handle.hasPointerCapture?.(drag.pointerId)) drag.handle.releasePointerCapture(drag.pointerId);
+  drag?.ghost?.remove();
+  clearSessionSourceDropMarker();
+  document.querySelectorAll('#session-source-options .dragging').forEach(row => row.classList.remove('dragging'));
+}
+
+function renderSessionSourceDraft() {
+  clearSessionSourceDrag();
+  const selected = visibleSessionSources(sessionSourceDraft).length;
+  const list = document.getElementById('session-source-options');
+  list.innerHTML = sessionSourceDraft.order.map((id,index) => {
+    const label = sessionSourceLabel(id);
+    return uiTemplate`<li class="session-source-option" data-source-option="${id}">
+      <span class="session-source-drag" data-source-drag="${id}" draggable="false" role="img" aria-label="拖拽排序 ${label}" title="拖拽排序 ${label}">
+        <svg width="14" height="20" viewBox="0 0 14 20" fill="currentColor" aria-hidden="true"><circle cx="4" cy="4" r="1.3"/><circle cx="10" cy="4" r="1.3"/><circle cx="4" cy="10" r="1.3"/><circle cx="10" cy="10" r="1.3"/><circle cx="4" cy="16" r="1.3"/><circle cx="10" cy="16" r="1.3"/></svg>
+      </span>
+      <label><input type="checkbox" data-source-visible="${id}" ${sessionSourceDraft.hidden.includes(id) ? '' : 'checked'}><span>${label}</span></label>
+      <div class="session-source-moves">
+        <button type="button" class="btn ghost" data-source-move="${id}" data-direction="-1" aria-label="上移 ${label}" ${index === 0 ? 'disabled' : ''}>↑</button>
+        <button type="button" class="btn ghost" data-source-move="${id}" data-direction="1" aria-label="下移 ${label}" ${index === sessionSourceDraft.order.length-1 ? 'disabled' : ''}>↓</button>
+      </div></li>`;
+  }).join('');
+  document.getElementById('session-source-selection-status').textContent = selected
+    ? uiTemplate`已选择 ${selected} / ${SESSION_SOURCE_IDS.length} 个来源` : uiText('至少保留一个来源才能保存');
+  document.getElementById('session-source-save').disabled = selected === 0;
+  document.getElementById('session-source-error').textContent = '';
+}
+
+function openSessionSourceManager(event) {
+  const dialog = document.getElementById('session-source-manager');
+  if (dialog.open || state.sessionHideConfirmationOpen) return;
+  sessionSourceManagerTrigger = event?.currentTarget || document.activeElement;
+  sessionSourceDraft = normalizeSessionSourcePreferences(state.sessionSourcePreferences);
+  renderSessionSourceDraft();
+  dialog.showModal();
+  document.querySelector('#session-source-options input')?.focus();
+}
+
+function closeSessionSourceManager() {
+  document.getElementById('session-source-manager').close();
+}
+
+function bindSessionSourceManager() {
+  const dialog = document.getElementById('session-source-manager');
+  if (!dialog) return;
+  for (const id of ['session-source-manage','btn-manage-session-sources']) {
+    document.getElementById(id)?.addEventListener('click', openSessionSourceManager);
+  }
+  for (const id of ['session-source-cancel','session-source-close']) {
+    document.getElementById(id).addEventListener('click', closeSessionSourceManager);
+  }
+  dialog.addEventListener('cancel', event => { event.preventDefault(); closeSessionSourceManager(); });
+  // WKWebView 的默认 Tab 行为可能跳过按钮；显式循环所有启用控件，和项目弹窗保持一致。
+  dialog.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && sessionSourceDrag) {
+      event.preventDefault();
+      event.stopPropagation();
+      clearSessionSourceDrag();
+      return;
+    }
+    if (event.key !== 'Tab') return;
+    const controls = [...dialog.querySelectorAll('input, button')].filter(el => !el.disabled);
+    if (!controls.length) return;
+    event.preventDefault();
+    const index = controls.indexOf(document.activeElement);
+    const next = index < 0 ? (event.shiftKey ? controls.length-1 : 0)
+      : (index+(event.shiftKey ? -1 : 1)+controls.length)%controls.length;
+    controls[next].focus();
+  });
+  dialog.addEventListener('close', () => {
+    clearSessionSourceDrag();
+    sessionSourceDraft = null;
+    if (sessionSourceManagerTrigger?.isConnected) sessionSourceManagerTrigger.focus({preventScroll:true});
+  });
+  dialog.addEventListener('click', event => {
+    if (event.target !== dialog) return;
+    const r = dialog.getBoundingClientRect();
+    if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) closeSessionSourceManager();
+  });
+  const list = document.getElementById('session-source-options');
+  list.addEventListener('pointerdown', event => {
+    const handle = event.target.closest('[data-source-drag]');
+    if (event.button !== 0 || !handle || !list.contains(handle) || !sessionSourceDraft?.order.includes(handle.dataset.sourceDrag)) return;
+    event.preventDefault();
+    clearSessionSourceDrag();
+    sessionSourceDrag = {id:handle.dataset.sourceDrag,handle,pointerId:event.pointerId,startX:event.clientX,startY:event.clientY,moved:false,target:'',position:'before',ghost:null};
+    try { handle.setPointerCapture(event.pointerId); } catch (_) { /* 合成事件没有活动指针，真实输入使用指针捕获。 */ }
+  });
+  const positionDrag = event => {
+    const drag = sessionSourceDrag;
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    if (!drag.moved && Math.hypot(event.clientX-drag.startX,event.clientY-drag.startY) < 5) return;
+    drag.moved = true;
+    drag.x = event.clientX;
+    drag.y = event.clientY;
+    if (!drag.frame) {
+      drag.frame = window.requestAnimationFrame(function tick() {
+        if (sessionSourceDrag !== drag) return;
+        positionDrag({pointerId:drag.pointerId,clientX:drag.x,clientY:drag.y});
+        drag.frame = window.requestAnimationFrame(tick);
+      });
+    }
+    drag.handle.closest('[data-source-option]').classList.add('dragging');
+    if (!drag.ghost) {
+      drag.ghost = document.createElement('div');
+      drag.ghost.className = 'session-source-ghost';
+      drag.ghost.textContent = sessionSourceLabel(drag.id);
+      drag.ghost.setAttribute('aria-hidden','true');
+      dialog.appendChild(drag.ghost);
+    }
+    drag.ghost.style.left = `${Math.min(event.clientX+12,window.innerWidth-170)}px`;
+    drag.ghost.style.top = `${Math.min(event.clientY+12,window.innerHeight-50)}px`;
+    clearSessionSourceDropMarker();
+    drag.target = '';
+    const bounds = list.getBoundingClientRect();
+    if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) return;
+    if (event.clientY < bounds.top+30) list.scrollTop -= 14;
+    else if (event.clientY > bounds.bottom-30) list.scrollTop += 14;
+    const row = document.elementFromPoint(event.clientX,event.clientY)?.closest('[data-source-option]');
+    if (!row || !list.contains(row) || row.dataset.sourceOption === drag.id) return;
+    const r = row.getBoundingClientRect();
+    drag.target = row.dataset.sourceOption;
+    drag.position = event.clientY < r.top+r.height/2 ? 'before' : 'after';
+    row.classList.add(`drop-${drag.position}`);
+  };
+  list.addEventListener('pointermove', positionDrag);
+  list.addEventListener('pointerup', event => {
+    const drag = sessionSourceDrag;
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    positionDrag(event);
+    const {id,target,position,moved} = drag;
+    clearSessionSourceDrag();
+    if (!moved || !target || !sessionSourceDraft) return;
+    sessionSourceDraft = reorderSessionSource(sessionSourceDraft,id,target,position);
+    renderSessionSourceDraft();
+    list.querySelector(`[data-source-visible="${id}"]`)?.focus({preventScroll:true});
+    document.getElementById('session-source-selection-status').textContent += uiTemplate` · ${sessionSourceLabel(id)} 已移到第 ${sessionSourceDraft.order.indexOf(id)+1} 位，保存后生效`;
+  });
+  for (const type of ['pointercancel','lostpointercapture']) {
+    list.addEventListener(type,event=>{if(sessionSourceDrag?.pointerId===event.pointerId)clearSessionSourceDrag();});
+  }
+  // 外部文本和文件不是排序输入，不读取或执行拖入内容。
+  list.addEventListener('dragover',event=>event.preventDefault());
+  list.addEventListener('drop',event=>event.preventDefault());
+  list.addEventListener('change', event => {
+    const id = event.target.dataset.sourceVisible;
+    if (!SESSION_SOURCE_IDS.includes(id)) return;
+    sessionSourceDraft.hidden = sessionSourceDraft.hidden.filter(value => value !== id);
+    if (!event.target.checked) sessionSourceDraft.hidden.push(id);
+    renderSessionSourceDraft();
+    list.querySelector(`[data-source-visible="${id}"]`)?.focus();
+  });
+  list.addEventListener('click', event => {
+    const button = event.target.closest('[data-source-move]');
+    if (!button || button.disabled) return;
+    const id = button.dataset.sourceMove, direction = button.dataset.direction;
+    sessionSourceDraft = moveSessionSource(sessionSourceDraft,id,Number(direction));
+    renderSessionSourceDraft();
+    const next = list.querySelector(`[data-source-move="${id}"][data-direction="${direction}"]`);
+    (next && !next.disabled ? next : list.querySelector(`[data-source-visible="${id}"]`))?.focus();
+  });
+  document.getElementById('session-source-reset').addEventListener('click', () => {
+    sessionSourceDraft = normalizeSessionSourcePreferences(null);
+    renderSessionSourceDraft();
+  });
+  document.getElementById('session-source-save').addEventListener('click', () => {
+    try {
+      const preferences = persistSessionSourcePreferences(sessionSourceDraft);
+      state.sessionSourcePreferences = preferences;
+      const visible = visibleSessionSources(preferences);
+      if (!visible.includes(state.sessionSource)) switchSessionSource(visible[0]);
+      else renderSessionSourceTabs();
+      closeSessionSourceManager();
+      flash(uiText('来源 Tab 已保存'));
+    } catch (error) {
+      document.getElementById('session-source-error').textContent = uiTemplate`保存失败：${error.message || error}`;
+    }
+  });
+}
+
 function switchSessionSource(source) {
-  if (!SESSION_SOURCE_IDS.includes(source) || source === state.sessionSource) return;
+  if (!visibleSessionSources(state.sessionSourcePreferences).includes(source) || source === state.sessionSource) return;
   const queryInput = document.getElementById('session-query');
   activeSessionView().query = queryInput.value || '';
   state.sessionSource = source;
   const targetView = activeSessionView();
 
-  document.querySelectorAll('.session-source-tab').forEach((el) => {
-    const active = el.dataset.sessionSource === source;
-    el.classList.toggle('active', active);
-    el.setAttribute('aria-selected', active ? 'true' : 'false');
-    el.tabIndex = active ? 0 : -1;
-  });
-  const panel = document.getElementById('session-source-panel');
-  if (panel) {
-    const activeTab = document.querySelector(`.session-source-tab[data-session-source="${source}"]`);
-    if (activeTab) panel.setAttribute('aria-labelledby', activeTab.id);
-  }
+  renderSessionSourceTabs();
   queryInput.value = targetView.query;
   document.getElementById('session-visibility').value = targetView.visibility;
   if (targetView.needsRefresh) { targetView.items = []; targetView.loading = true; }
@@ -351,12 +688,12 @@ async function requestSessionHidden(source, session, hidden) {
   const view = state.sessionViews[source];
   if (!view || state.sessionHideConfirmationOpen || view.pendingHidden.has(session.session_id)) return;
   const sessionId = session.session_id;
-  const title = String(session.title || '无标题').replace(/\s+/g, ' ').slice(0, 160);
+  const title = String(session.title || uiText('无标题')).replace(/\s+/g, ' ').slice(0, 160);
   state.sessionHideConfirmationOpen = true;
   try {
     const confirmed = await uiConfirm(
-      `${sessionSourceLabel(source)} · ${title}\n会话 ID：${sessionId}\n\n仅从本看板的正常列表隐藏，不会删除或归档源会话，也不影响收藏。\n之后可切换到“已隐藏”，点击“恢复显示”。`,
-      { title: '隐藏此会话？', okText: '确认隐藏', cancelFirst: true },
+      uiTemplate`${sessionSourceLabel(source)} · ${title}\n会话 ID：${sessionId}\n\n仅从本看板的正常列表隐藏，不会删除或归档源会话，也不影响收藏。\n之后可切换到“已隐藏”，点击“恢复显示”。`,
+      { title: uiText('隐藏此会话？'), okText: uiText('确认隐藏'), cancelFirst: true },
     );
     if (!confirmed || state.activeTab !== 'sessions' || state.sessionSource !== source || view.visibility !== 'visible') return;
     await setSessionHidden(source, sessionId, true);
@@ -387,10 +724,10 @@ async function setSessionHidden(source, sessionId, hidden) {
     if (state.sessionDetailKey === `${source}:${sessionId}`) closeDrawer();
     if (state.sessionSource === source) {
       const refreshed = await fetchSessions(view.page, view.pageSize);
-      if (refreshed === false) view.notice = `${hidden ? '隐藏' : '恢复显示'}已保存，列表刷新失败，请重新读取`;
+      if (refreshed === false) setSessionNotice(view, () => uiTemplate`${hidden ? uiText('隐藏') : uiText('恢复显示')}已保存，列表刷新失败，请重新读取`);
     }
   } catch (error) {
-    view.notice = saved ? '偏好已保存，列表刷新失败，请重新读取' : `显示偏好保存失败：${error}`;
+    setSessionNotice(view, () => saved ? uiText('偏好已保存，列表刷新失败，请重新读取') : uiTemplate`显示偏好保存失败：${error}`);
   } finally {
     view.pendingHidden.delete(sessionId);
     if (state.sessionSource === source) renderSessions();
@@ -407,16 +744,16 @@ async function toggleSessionFavorite(source, sessionId) {
   if (state.sessionSource === source) renderSessions();
   let saved = false;
   try {
-    await invoke('toggle_favorite', { sessionId });
+    await invoke('toggle_favorite', { source, sessionId });
     saved = true;
     state.sessionListRequestSerial[source] += 1;
     view.loading = false;
     view.needsRefresh = true;
     if (state.sessionSource === source && await fetchSessions(view.page, view.pageSize) === false) {
-      view.notice = '收藏已保存，列表刷新失败，请重新读取';
+      setSessionNotice(view, () => uiText('收藏已保存，列表刷新失败，请重新读取'));
     }
   } catch (error) {
-    view.notice = saved ? '收藏已保存，列表刷新失败，请重新读取' : `收藏保存失败：${error}`;
+    setSessionNotice(view, () => saved ? uiText('收藏已保存，列表刷新失败，请重新读取') : uiTemplate`收藏保存失败：${error}`);
   } finally {
     view.pendingFavorites.delete(sessionId);
     if (state.sessionSource === source) renderSessions();
@@ -425,21 +762,74 @@ async function toggleSessionFavorite(source, sessionId) {
 
 function switchTab(tab) {
   state.activeTab = tab;
+  updatePageHeading();
   document.querySelectorAll('.nav-item').forEach(el => {
     el.classList.toggle('active', el.dataset.tab === tab);
   });
   document.querySelectorAll('.page').forEach(el => {
     el.classList.toggle('hidden', el.id !== 'page-' + tab);
   });
-  // 切 tab 时兜底关掉右侧详情抽屉 —— 抽屉是当前 tab 的辅助面板（Session Board 抽屉 /
-  // Fleet Board 项目详情抽屉），切走后不该继续飘在新 tab 上下文里。
+  // 切页沿用原有的加载与关闭行为；语言切换不调用本函数。
   closeDrawer();
   if (tab === 'settings') loadSettings();
-  // 唯一的页面级自动触发点：用户显式切入代码知识页后读取一次。
   if (tab === 'repowiki') enterRepoWikiTab();
-  // Fleet Board 切入时静默拉一次 aggregate，避免后台采集器落库后 UI 陈旧。
-  // 静默失败：出错只 console.warn 不打扰用户（用户点"重新读取"按钮才是显式反馈）。
   if (tab === 'fleet') refreshAggregateSilently();
+}
+
+function updatePageHeading() {
+  const tab = state.activeTab;
+  const heading = document.getElementById('topbar-title');
+  if (heading) heading.textContent = ({ sessions: uiText('会话看板 · 会话工作台'), fleet: uiText('协作看板 · 跨机状态'), projects: uiText('项目管理'), repowiki: uiText('代码知识 · RepoWiki'), settings: uiText('设置') })[tab] || tab;
+}
+
+// 只重绘现有内存视图；不重载、不调用业务 IPC、不重建用户输入控件。
+function refreshInterfaceLanguage() {
+  const focus = document.activeElement;
+  const scrolls = [...document.querySelectorAll('.table-scroll, .inspector-body, .single-page')].map(node => [node,node.scrollTop,node.scrollLeft]);
+  updatePageHeading();
+  renderSessionSourceTabs();
+  renderSessions();
+  renderPagination();
+  renderProjects();
+  renderFleetBoard();
+  refreshTableScrollLabels();
+  renderIdentityFields();
+  if (state.machineIdError) renderMachineIdentityFailure(state.machineIdError);
+  if (state.sessionPresentation) renderSessionInspector(...state.sessionPresentation);
+  if (state.fleetPresentation) showAggregateDetail(state.fleetPresentation);
+  if (document.getElementById('session-source-manager')?.open) renderSessionSourceDraft();
+  renderMachinePickers();
+  if (state.repowiki.status) {
+    renderRepoWikiOverview(true);
+    renderRepoWikiFindControls();
+  }
+  const title = document.getElementById('modal-title');
+  if (title) title.textContent = state.editingProjectId ? uiText('编辑项目') : uiText('新增项目');
+  if (state.syncInProgress) {
+    const status = document.getElementById('sync-status');
+    const restart = status.querySelector('button');
+    if (restart) {
+      status.firstChild.textContent = uiText('App 可能卡死，请重启 ');
+      restart.textContent = uiText('重启 App');
+    } else status.textContent = uiText('同步中…');
+  } else updateSyncStatus();
+  if (state.settingsStatusRenderer) setSyncStatus(state.settingsStatusRenderer, state.settingsStatusError);
+  for (const [node,top,left] of scrolls) { if (node.isConnected) { node.scrollTop=top; node.scrollLeft=left; } }
+  if (focus?.isConnected) focus.focus({preventScroll:true});
+}
+
+function refreshTableScrollLabels() {
+  for (const [id, source] of [['session-table','会话列表'], ['fleet-table','Fleet 列表'], ['project-table','项目列表']]) {
+    const viewport = document.getElementById(`${id}-viewport`);
+    if (!viewport) continue;
+    const label = uiText(source);
+    viewport.setAttribute('aria-label', uiTemplate`${label}，可用左右方向键滚动列`);
+    const controls = viewport.previousElementSibling;
+    if (!controls?.classList.contains('table-scroll-controls')) continue;
+    controls.querySelector('span').textContent = uiText('左右滚动查看更多列');
+    controls.querySelector('[data-scroll="left"]').setAttribute('aria-label', uiText('向左滚动{0}', label));
+    controls.querySelector('[data-scroll="right"]').setAttribute('aria-label', uiText('向右滚动{2}', '', '', label));
+  }
 }
 
 // -------- 代码知识 / RepoWiki（严格按用户动作触发） --------
@@ -458,7 +848,7 @@ function repoWikiSelectorEntries(projects, machineId = '') {
       || typeof machines[machineId] !== 'string' || !machines[machineId].trim()) continue;
     entries.push({
       key: `rw-project-${entries.length}`,
-      label: `[共享] ${String(project?.name || projectId)}`,
+      label: uiTemplate`[共享] ${String(project?.name || projectId)}`,
       selector: { kind: 'shared', projectId },
     });
   }
@@ -467,7 +857,7 @@ function repoWikiSelectorEntries(projects, machineId = '') {
     if (typeof name !== 'string' || !name.trim()) continue;
     entries.push({
       key: `rw-project-${entries.length}`,
-      label: `[本机] ${name}`,
+      label: uiTemplate`[本机] ${name}`,
       selector: { kind: 'private', name },
     });
   }
@@ -481,6 +871,7 @@ function bindRepoWiki() {
   const article = document.getElementById('repowiki-article');
   const graphForm = document.getElementById('repowiki-graph-search-form');
   const graphResults = document.getElementById('repowiki-graph-results');
+  bindRepoWikiSearch();
 
   projectSelect.addEventListener('change', () => {
     state.repowiki.selectedKey = projectSelect.value;
@@ -556,10 +947,10 @@ function emptyStateHtml(title, hint) {
 function resetRepoWikiSummary() {
   document.getElementById('repowiki-branch').textContent = '—';
   document.getElementById('repowiki-generation').textContent = '—';
-  document.getElementById('repowiki-wiki-state').textContent = '状态：—';
-  document.getElementById('repowiki-generation-time').textContent = '生成时间：当前契约未提供';
+  document.getElementById('repowiki-wiki-state').textContent = uiText('状态：—');
+  document.getElementById('repowiki-generation-time').textContent = uiText('生成时间：当前契约未提供');
   document.getElementById('repowiki-graph-state').textContent = '—';
-  document.getElementById('repowiki-graph-generation').textContent = '代次：—';
+  document.getElementById('repowiki-graph-generation').textContent = uiText('代次：—');
   document.getElementById('repowiki-review-total').textContent = '—';
   document.getElementById('repowiki-review-detail').textContent = '—';
 }
@@ -577,7 +968,7 @@ function briefVersion(value) {
 function repoWikiGeneratedLabel(value) {
   const time = value ? new Date(value) : null;
   return time && !Number.isNaN(time.getTime())
-    ? time.toLocaleString('zh-CN', { hour12: false })
+    ? time.toLocaleString(typeof window !== 'undefined' && window.DashboardI18n?.language === 'en' ? 'en-US' : 'zh-CN', { hour12: false })
     : '';
 }
 
@@ -598,16 +989,16 @@ function resolveRepoWikiWikiState(status, generations) {
 function repoWikiStatusNotice(status, generations) {
   if (!status || typeof status !== 'object') return null;
   if (status.initialization !== 'initialized') {
-    return { kind: 'info', message: '该项目还没有初始化 RepoWiki。' };
+    return { kind: 'info', message: uiText('该项目还没有初始化 RepoWiki。') };
   }
   const wiki = resolveRepoWikiWikiState(status, generations);
   if (wiki.freshness === 'absent') {
-    return { kind: 'info', message: '该项目还没有生成正式 Wiki。' };
+    return { kind: 'info', message: uiText('该项目还没有生成正式 Wiki。') };
   }
   const generatedAt = repoWikiGeneratedLabel(wiki.generated_at);
-  const generatedPart = generatedAt ? `这份 Wiki 生成于 ${generatedAt}` : '这份 Wiki';
+  const generatedPart = generatedAt ? uiTemplate`这份 Wiki 生成于 ${generatedAt}` : uiText('这份 Wiki');
   if (wiki.freshness === 'damaged' || wiki.integrity === 'damaged') {
-    return { kind: 'warn', message: `${generatedPart}，完整性校验没通过，内容可能不可信。` };
+    return { kind: 'warn', message: uiTemplate`${generatedPart}，完整性校验没通过，内容可能不可信。` };
   }
   if (wiki.freshness !== 'stale') return null;
 
@@ -615,17 +1006,17 @@ function repoWikiStatusNotice(status, generations) {
   const changes = [];
   const currentHead = status.repository?.head_commit || status.graph?.current_source_commit;
   if (wiki.head_commit && currentHead && wiki.head_commit !== currentHead) {
-    changes.push(`源码从 ${briefVersion(wiki.head_commit)} 变成了 ${briefVersion(currentHead)}`);
+    changes.push(uiTemplate`源码从 ${briefVersion(wiki.head_commit)} 变成了 ${briefVersion(currentHead)}`);
   }
   const currentGraph = status.graph?.generation_id;
   if (wiki.graph_generation_id && currentGraph && wiki.graph_generation_id !== currentGraph) {
-    changes.push(`代码图谱从 ${briefVersion(wiki.graph_generation_id)} 重建成了 ${briefVersion(currentGraph)}`);
+    changes.push(uiTemplate`代码图谱从 ${briefVersion(wiki.graph_generation_id)} 重建成了 ${briefVersion(currentGraph)}`);
   }
   return {
     kind: 'warn',
     message: changes.length
-      ? `${generatedPart}，之后${changes.join('、')}，内容可能不是最新的。`
-      : `${generatedPart}，之后源码或代码图谱有变动，内容可能不是最新的。`,
+      ? uiTemplate`${generatedPart}，之后${changes.join('、')}，内容可能不是最新的。`
+      : uiTemplate`${generatedPart}，之后源码或代码图谱有变动，内容可能不是最新的。`,
   };
 }
 
@@ -643,7 +1034,7 @@ function setRepoWikiNotice(message = '', kind = 'info', action = false) {
     button.type = 'button';
     button.className = 'btn ghost';
     button.dataset.repowikiOpenSettings = 'true';
-    button.textContent = '打开设置';
+    button.textContent = uiText('打开设置');
     banner.appendChild(button);
   }
   notice.appendChild(banner);
@@ -653,15 +1044,15 @@ function renderRepoWikiNoProjects() {
   state.repowiki.requestSerial += 1;
   resetRepoWikiSummary();
   resetRepoWikiNavigation();
-  setRepoWikiNotice('当前 registry 没有可选择的共享或本机私有项目。', 'info');
+  setRepoWikiNotice(uiText('当前 registry 没有可选择的共享或本机私有项目。'), 'info');
   renderRepoWikiPageNav({});
   document.getElementById('repowiki-article').innerHTML = emptyStateHtml(
-    '没有已登记项目',
-    '请先在「项目管理」登记项目；这里不会接受或拼接任意本地路径。'
+    uiText('没有已登记项目'),
+    uiText('请先在「项目管理」登记项目；这里不会接受或拼接任意本地路径。')
   );
   document.getElementById('repowiki-graph-results').innerHTML = emptyStateHtml(
-    '没有可查询项目',
-    '登记项目后再显式搜索本地图谱。'
+    uiText('没有可查询项目'),
+    uiText('登记项目后再显式搜索本地图谱。')
   );
 }
 
@@ -674,25 +1065,28 @@ function repoWikiErrorCode(error) {
 function repoWikiErrorMessage(error) {
   const code = repoWikiErrorCode(error);
   const known = {
-    repowiki_cli_path_missing: '尚未配置 RepoWiki CLI 绝对路径。',
-    repowiki_data_root_missing: '尚未配置 RepoWiki data root 绝对路径。',
-    invalid_repowiki_cli_path: 'RepoWiki CLI 路径不存在、不安全或不可执行。',
-    invalid_repowiki_data_root: 'RepoWiki data root 不是可用的绝对目录。',
-    project_not_bound: '该共享项目没有当前机器的本地路径绑定。',
-    project_not_found: 'Dashboard registry 中不存在该项目。',
-    repowiki_timeout: 'RepoWiki 只读命令执行超时。',
-    repowiki_output_too_large: 'RepoWiki 返回内容超过安全上限。',
-    repowiki_protocol_violation: 'RepoWiki CLI 返回的协议不兼容或无效。',
-    repowiki_platform_unsupported: '当前 RepoWiki 只读浏览仅支持 macOS / Linux。',
-    repository_not_initialized: '该项目尚未初始化 RepoWiki。',
-    wiki_baseline_missing: '该项目尚未生成并发布正式 Wiki。',
-    wiki_baseline_invalid: '正式 Wiki 基线无效或已损坏，导航暂不可读。',
-    invalid_wiki_navigation: 'Wiki 导航数据无效或无法解析。',
-    graph_missing: '当前分支没有本地图谱。',
-    graph_stale: '本地图谱与当前源码不一致，请在终端显式更新后再查询。',
-    graph_integrity_failed: '本地图谱已损坏，请在终端显式重建。',
+    repowiki_cli_path_missing: uiText('尚未配置 RepoWiki CLI 绝对路径。'),
+    repowiki_data_root_missing: uiText('尚未配置 RepoWiki data root 绝对路径。'),
+    invalid_repowiki_cli_path: uiText('RepoWiki CLI 路径不存在、不安全或不可执行。'),
+    invalid_repowiki_data_root: uiText('RepoWiki data root 不是可用的绝对目录。'),
+    project_not_bound: uiText('该共享项目没有当前机器的本地路径绑定。'),
+    project_not_found: uiText('Dashboard registry 中不存在该项目。'),
+    repowiki_timeout: uiText('RepoWiki 只读命令执行超时。'),
+    repowiki_output_too_large: uiText('RepoWiki 返回内容超过安全上限。'),
+    repowiki_protocol_violation: uiText('RepoWiki CLI 返回的协议不兼容或无效。'),
+    repowiki_platform_unsupported: uiText('当前平台没有可用的 RepoWiki 进程适配器。'),
+    repowiki_process_control_failed: uiText('无法安全执行或清理 RepoWiki 进程，请重试。'),
+    repowiki_integrity_changed: uiText('Wiki 正在发布或内容校验不一致，请完成发布后重试。'),
+    repowiki_verification_limit: uiText('Wiki 代次校验超过读取预算（256 MiB / 4096 文件 / 30 秒），请用 RepoWiki CLI 核验。'),
+    repository_not_initialized: uiText('该项目尚未初始化 RepoWiki。'),
+    wiki_baseline_missing: uiText('该项目尚未生成并发布正式 Wiki。'),
+    wiki_baseline_invalid: uiText('正式 Wiki 基线无效或已损坏，导航暂不可读。'),
+    invalid_wiki_navigation: uiText('Wiki 导航数据无效或无法解析。'),
+    graph_missing: uiText('当前分支没有本地图谱。'),
+    graph_stale: uiText('本地图谱与当前源码不一致，请在终端显式更新后再查询。'),
+    graph_integrity_failed: uiText('本地图谱已损坏，请在终端显式重建。'),
   };
-  return known[code] || '读取 RepoWiki 失败；请检查本机配置和项目状态。';
+  return known[code] || uiText('读取 RepoWiki 失败；请检查本机配置和项目状态。');
 }
 
 function isRepoWikiConfigError(error) {
@@ -713,15 +1107,15 @@ function isRepoWikiGraphError(error) {
 
 function unwrapRepoWikiEnvelope(envelope, expectedCommand) {
   if (!envelope || typeof envelope !== 'object' || envelope.protocol_version !== 1) {
-    throw Object.assign(new Error('[repowiki_protocol_violation] RepoWiki 协议版本无效'), { code: 'repowiki_protocol_violation' });
+    throw Object.assign(new Error(uiText('[repowiki_protocol_violation] RepoWiki 协议版本无效')), { code: 'repowiki_protocol_violation' });
   }
   if (envelope.command !== expectedCommand || typeof envelope.ok !== 'boolean') {
-    throw Object.assign(new Error('[repowiki_protocol_violation] RepoWiki 命令响应不匹配'), { code: 'repowiki_protocol_violation' });
+    throw Object.assign(new Error(uiText('[repowiki_protocol_violation] RepoWiki 命令响应不匹配')), { code: 'repowiki_protocol_violation' });
   }
   if (!envelope.ok) {
     const remote = envelope.error && typeof envelope.error === 'object' ? envelope.error : {};
     const code = typeof remote.code === 'string' ? remote.code : 'repowiki_remote_error';
-    const message = typeof remote.message === 'string' ? remote.message : 'RepoWiki 只读命令失败';
+    const message = typeof remote.message === 'string' ? remote.message : uiText('RepoWiki 只读命令失败');
     throw Object.assign(new Error(`[${code}] ${message}`), { code });
   }
   return envelope.result && typeof envelope.result === 'object' ? envelope.result : {};
@@ -747,10 +1141,10 @@ async function loadRepoWikiProject() {
   state.repowiki.currentPageId = '';
   resetRepoWikiSummary();
   resetRepoWikiNavigation();
-  setRepoWikiNotice('正在只读检查当前项目…', 'info');
+  setRepoWikiNotice(uiText('正在只读检查当前项目…'), 'info');
   renderRepoWikiPageNav({});
-  document.getElementById('repowiki-article').innerHTML = emptyStateHtml('正在读取', '正在检查正式 Wiki 状态与导航。');
-  document.getElementById('repowiki-graph-results').innerHTML = emptyStateHtml('尚未查询', '图查询只在提交搜索或点击节点操作时执行。');
+  document.getElementById('repowiki-article').innerHTML = emptyStateHtml(uiText('正在读取'), uiText('正在检查正式 Wiki 状态与导航。'));
+  document.getElementById('repowiki-graph-results').innerHTML = emptyStateHtml(uiText('尚未查询'), uiText('图查询只在提交搜索或点击节点操作时执行。'));
 
   try {
     const statusEnvelope = await invoke('repowiki_status', { selector });
@@ -762,14 +1156,14 @@ async function loadRepoWikiProject() {
     if (status.initialization !== 'initialized' || status.wiki?.freshness === 'absent') {
       setRepoWikiNotice(
         status.initialization !== 'initialized'
-          ? '该项目还没有初始化 RepoWiki。'
-          : '该项目还没有生成正式 Wiki。',
+          ? uiText('该项目还没有初始化 RepoWiki。')
+          : uiText('该项目还没有生成正式 Wiki。'),
         'info'
       );
       const article = document.getElementById('repowiki-article');
       article.innerHTML = emptyStateHtml(
-        'Wiki 尚未生成',
-        '请在项目终端显式生成并发布 RepoWiki，完成后点击「重新读取」。'
+        uiText('Wiki 尚未生成'),
+        uiText('请在项目终端显式生成并发布 RepoWiki，完成后点击「重新读取」。')
       );
       return;
     }
@@ -807,18 +1201,18 @@ async function loadRepoWikiProject() {
       // 降级关键点：Wiki 导航读失败只染导航 + 文章区，绝不 throw、不进整页 failure；
       // status 卡片与图谱查询区保持独立可用（renderRepoWikiFailure 内部按错误码分级）。
       const reason = projectError
-        || Object.assign(new Error('[invalid_wiki_navigation] 无法读取正式 Wiki 导航'), { code: 'invalid_wiki_navigation' });
+        || Object.assign(new Error(uiText('[invalid_wiki_navigation] 无法读取正式 Wiki 导航')), { code: 'invalid_wiki_navigation' });
       renderRepoWikiFailure(reason);
       return;
     }
     const notice = repoWikiStatusNotice(status, state.repowiki.generations);
-    if (warnings.length) setRepoWikiNotice(`RepoWiki 提示：${warnings.join('；')}`, 'warn');
+    if (warnings.length) setRepoWikiNotice(uiTemplate`RepoWiki 提示：${warnings.join('；')}`, 'warn');
     else if (notice) setRepoWikiNotice(notice.message, notice.kind);
-    else setRepoWikiNotice('当前内容来自 RepoWiki 正式发布区；Dashboard 只读展示。', 'info');
+    else setRepoWikiNotice(uiText('当前内容来自 RepoWiki 正式发布区；Dashboard 只读展示。'), 'info');
 
     document.getElementById('repowiki-article').innerHTML = emptyStateHtml(
-      '请选择文档页面',
-      '页面正文只在你点击左侧导航后读取。'
+      uiText('请选择文档页面'),
+      uiText('页面正文只在你点击左侧导航后读取。')
     );
   } catch (error) {
     if (requestSerial !== state.repowiki.requestSerial) return;
@@ -835,7 +1229,7 @@ function renderRepoWikiFailure(error) {
   const code = repoWikiErrorCode(error);
   if (isRepoWikiGraphError(error)) {
     const results = document.getElementById('repowiki-graph-results');
-    results.innerHTML = emptyStateHtml('图谱查询失败', repoWikiErrorMessage(error));
+    results.innerHTML = emptyStateHtml(uiText('图谱查询失败'), repoWikiErrorMessage(error));
     return;
   }
   if (isRepoWikiConfigError(error)) {
@@ -843,17 +1237,17 @@ function renderRepoWikiFailure(error) {
     resetRepoWikiNavigation();
     renderRepoWikiPageNav({});
     document.getElementById('repowiki-article').innerHTML = emptyStateHtml(
-      'RepoWiki 未配置',
-      '请在设置页保存 CLI 与 data root 的绝对路径；保存前不会写入任何配置。'
+      uiText('RepoWiki 未配置'),
+      uiText('请在设置页保存 CLI 与 data root 的绝对路径；保存前不会写入任何配置。')
     );
     return;
   }
   // wiki 类 / 项目状态类：只染导航 + 文章区。
-  setRepoWikiNotice(`Wiki 导航暂不可读：${code || 'unknown'}`, 'warn');
+  setRepoWikiNotice(uiTemplate`Wiki 导航暂不可读：${code || 'unknown'}`, 'warn');
   resetRepoWikiNavigation();
   renderRepoWikiPageNav({});
   document.getElementById('repowiki-article').innerHTML = emptyStateHtml(
-    'Wiki 导航暂不可读',
+    uiText('Wiki 导航暂不可读'),
     repoWikiErrorMessage(error)
   );
 }
@@ -866,6 +1260,11 @@ function resetRepoWikiNavigation() {
   state.repowiki.pathIndex = new Map();
   state.repowiki.homePageId = '';
   state.repowiki.expandedPageIds = new Set();
+  state.repowiki.navQuery = '';
+  if (typeof document !== 'undefined') {
+    document.getElementById('repowiki-nav-query').value = '';
+    clearRepoWikiDocumentSearch(false);
+  }
 }
 
 // 校验并载入 v2 navigation（扁平数组 + parent_page_id/order 表达树形）。
@@ -928,27 +1327,27 @@ function branchLabel(value) {
 }
 
 function repoWikiGeneratedTime(value) {
-  if (typeof value !== 'string' || !value.trim()) return '生成时间：当前只读契约未提供';
+  if (typeof value !== 'string' || !value.trim()) return uiText('生成时间：当前只读契约未提供');
   const time = new Date(value);
   return Number.isNaN(time.getTime())
-    ? '生成时间：当前只读契约未提供'
-    : `生成时间：${time.toLocaleString('zh-CN', { hour12: false })}`;
+    ? uiText('生成时间：当前只读契约未提供')
+    : uiTemplate`生成时间：${time.toLocaleString(typeof window !== 'undefined' && window.DashboardI18n?.language === 'en' ? 'en-US' : 'zh-CN', { hour12: false })}`;
 }
 
 function graphStateLabel(graph) {
-  if (!graph || graph.availability === 'absent') return '未生成';
-  if (graph.integrity === 'damaged') return '已损坏';
-  if (graph.source_freshness === 'stale') return '已过期';
-  if (graph.availability === 'ready' && graph.source_freshness === 'current') return '可用 · 最新';
-  return `${graph.availability || '未知'} · ${graph.source_freshness || '未知'}`;
+  if (!graph || graph.availability === 'absent') return uiText('未生成');
+  if (graph.integrity === 'damaged') return uiText('已损坏');
+  if (graph.source_freshness === 'stale') return uiText('已过期');
+  if (graph.availability === 'ready' && graph.source_freshness === 'current') return uiText('可用 · 最新');
+  return `${graph.availability || uiText('未知')} · ${graph.source_freshness || uiText('未知')}`;
 }
 
 function wikiStateLabel(wiki) {
-  if (!wiki || wiki.freshness === 'absent') return '未生成';
-  if (wiki.integrity === 'damaged' || wiki.freshness === 'damaged') return '已损坏';
-  if (wiki.freshness === 'stale') return '已过期';
-  if (wiki.freshness === 'current' && wiki.integrity === 'healthy') return '最新 · 完整';
-  return `${wiki.freshness || '未知'} · ${wiki.integrity || '未知'}`;
+  if (!wiki || wiki.freshness === 'absent') return uiText('未生成');
+  if (wiki.integrity === 'damaged' || wiki.freshness === 'damaged') return uiText('已损坏');
+  if (wiki.freshness === 'stale') return uiText('已过期');
+  if (wiki.freshness === 'current' && wiki.integrity === 'healthy') return uiText('最新 · 完整');
+  return `${wiki.freshness || uiText('未知')} · ${wiki.integrity || uiText('未知')}`;
 }
 
 // v2 代次只记「生成当时的 HEAD 与图谱代次」，新鲜度得跟 status 的当前值比才知道：
@@ -962,7 +1361,7 @@ function repoWikiV2Freshness(wiki, status) {
   return 'current';
 }
 
-function renderRepoWikiOverview() {
+function renderRepoWikiOverview(preserveReader = false) {
   const status = state.repowiki.status || {};
   const project = state.repowiki.project || {};
   const generations = state.repowiki.generations || {};
@@ -988,29 +1387,30 @@ function renderRepoWikiOverview() {
   const generationEl = document.getElementById('repowiki-generation');
   generationEl.textContent = shortRepoWikiId(wikiGeneration);
   generationEl.title = wikiGeneration || '';
-  document.getElementById('repowiki-wiki-state').textContent = `状态：${wikiStateLabel(wiki)}`;
+  document.getElementById('repowiki-wiki-state').textContent = uiTemplate`状态：${wikiStateLabel(wiki)}`;
   document.getElementById('repowiki-generation-time').textContent = repoWikiGeneratedTime(generatedAt);
   document.getElementById('repowiki-graph-state').textContent = graphStateLabel(graph);
   const graphGenerationEl = document.getElementById('repowiki-graph-generation');
-  graphGenerationEl.textContent = `代次：${shortRepoWikiId(graph.generation_id)}`;
+  graphGenerationEl.textContent = uiTemplate`代次：${shortRepoWikiId(graph.generation_id)}`;
   graphGenerationEl.title = graph.generation_id || '';
   document.getElementById('repowiki-review-total').textContent = Number.isFinite(Number(totals.total))
-    ? `${Number(totals.reviewed) || 0} / ${Number(totals.total) || 0} 已审`
+    ? uiTemplate`${Number(totals.reviewed) || 0} / ${Number(totals.total) || 0} 已审`
     : '—';
   document.getElementById('repowiki-review-detail').textContent = Number.isFinite(Number(totals.total))
-    ? `未审 ${Number(totals.unreviewed) || 0} · 过期 ${Number(totals.stale) || 0}`
+    ? uiTemplate`未审 ${Number(totals.unreviewed) || 0} · 过期 ${Number(totals.stale) || 0}`
     : '—';
   // 载入/清空当前项目动态目录（project 为空时清空），再树形渲染导航。
-  validatedRepoWikiNavigation(state.repowiki.project);
+  if (!preserveReader) validatedRepoWikiNavigation(state.repowiki.project);
   renderRepoWikiPageNav(review.pages || {});
 
+  if (preserveReader) return;
   const graphResults = document.getElementById('repowiki-graph-results');
   if (graph.availability === 'absent') {
-    graphResults.innerHTML = emptyStateHtml('当前分支没有本地图谱', 'Dashboard 不会自动构建；请在终端显式执行图谱构建后再读取。');
+    graphResults.innerHTML = emptyStateHtml(uiText('当前分支没有本地图谱'), uiText('Dashboard 不会自动构建；请在终端显式执行图谱构建后再读取。'));
   } else if (graph.integrity === 'damaged') {
-    graphResults.innerHTML = emptyStateHtml('本地图谱已损坏', '请在终端显式完整重建；Dashboard 不会自动修复。');
+    graphResults.innerHTML = emptyStateHtml(uiText('本地图谱已损坏'), uiText('请在终端显式完整重建；Dashboard 不会自动修复。'));
   } else if (graph.source_freshness === 'stale') {
-    graphResults.innerHTML = emptyStateHtml('本地图谱已过期', '请在终端显式增量更新；Dashboard 不会自动更新。');
+    graphResults.innerHTML = emptyStateHtml(uiText('本地图谱已过期'), uiText('请在终端显式增量更新；Dashboard 不会自动更新。'));
   }
 }
 
@@ -1020,7 +1420,14 @@ function renderRepoWikiPageNav(reviewPages = {}) {
   const nav = document.getElementById('repowiki-page-nav');
   nav.replaceChildren();
   const pages = Array.isArray(state.repowiki.pages) ? state.repowiki.pages : [];
+  const filter = filterRepoWikiNavigation(pages, state.repowiki.navQuery);
+  document.getElementById('repowiki-nav-count').textContent = filter ? uiTemplate`匹配 ${filter.matches.size} 篇` : uiTemplate`${pages.length} 篇`;
+  document.getElementById('btn-repowiki-nav-clear').disabled = !state.repowiki.navQuery;
   if (!pages.length) return; // 无导航数据：留空，提示交给 notice / 文章区
+  if (filter && !filter.matches.size) {
+    nav.innerHTML = emptyStateHtml(uiText('没有匹配的目录'), uiText('换个关键词，或清空筛选查看全部目录。'));
+    return;
+  }
   const index = state.repowiki.pageIndex;
   const childrenById = new Map();
   const roots = [];
@@ -1040,11 +1447,12 @@ function renderRepoWikiPageNav(reviewPages = {}) {
   const visited = new Set(); // 环保护：畸形 parent 链不至于无限递归
   const renderLevel = (nodes, depth) => {
     for (const page of nodes) {
+      if (filter && !filter.visible.has(page.page_id)) continue;
       if (visited.has(page.page_id)) continue;
       visited.add(page.page_id);
       const children = childrenById.get(page.page_id) || [];
       const hasChildren = children.length > 0;
-      const isExpanded = hasChildren && expanded.has(page.page_id);
+      const isExpanded = hasChildren && (filter ? filter.ancestors.has(page.page_id) : expanded.has(page.page_id));
       nav.appendChild(buildRepoWikiNavRow(page, depth, hasChildren, isExpanded, reviewPages));
       if (isExpanded) renderLevel(children, depth + 1);
     }
@@ -1056,7 +1464,11 @@ function renderRepoWikiPageNav(reviewPages = {}) {
 function buildRepoWikiNavRow(page, depth, hasChildren, isExpanded, reviewPages) {
   const row = document.createElement('div');
   row.className = 'repowiki-nav-row';
-  row.style.paddingLeft = (depth * 14) + 'px';
+  row.style.setProperty('--tree-indent', (depth * 16) + 'px');
+  const line = document.createElement('div');
+  line.className = 'repowiki-nav-line';
+  line.classList.toggle('active', page.page_id === state.repowiki.currentPageId);
+  line.classList.toggle('is-folder', hasChildren);
 
   if (hasChildren) {
     const toggle = document.createElement('button');
@@ -1064,25 +1476,50 @@ function buildRepoWikiNavRow(page, depth, hasChildren, isExpanded, reviewPages) 
     toggle.className = 'repowiki-nav-toggle';
     toggle.dataset.togglePageId = page.page_id;
     toggle.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
-    toggle.setAttribute('aria-label', isExpanded ? '收起' : '展开');
-    toggle.textContent = isExpanded ? '▾' : '▸';
-    row.appendChild(toggle);
+    toggle.setAttribute('aria-label', isExpanded ? uiText('收起') : uiText('展开'));
+    toggle.title = `${isExpanded ? uiText('收起') : uiText('展开')} ${page.title}`;
+    if (state.repowiki.navQuery.trim()) {
+      toggle.disabled = true;
+      toggle.title = uiText('筛选期间显示匹配路径；清空后恢复原展开状态');
+    }
+    toggle.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg>';
+    line.appendChild(toggle);
   } else {
     // 叶子占位，保持与有开关行的图标列对齐。
     const spacer = document.createElement('span');
     spacer.className = 'repowiki-nav-toggle-spacer';
     spacer.setAttribute('aria-hidden', 'true');
-    row.appendChild(spacer);
+    line.appendChild(spacer);
   }
 
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'repowiki-nav-item';
   button.dataset.pageId = page.page_id;
+  button.title = page.title;
+  button.setAttribute('aria-label', page.title);
   button.classList.toggle('active', page.page_id === state.repowiki.currentPageId);
+  if (page.page_id === state.repowiki.currentPageId) button.setAttribute('aria-current', 'page');
   const title = document.createElement('span');
   title.className = 'repowiki-nav-title';
-  title.textContent = page.title;
+  const name = document.createElement('span');
+  name.className = 'repowiki-nav-name';
+  // 中文说明独立一行，长模块名不会挤掉其用途；完整原题保留在可访问名称和悬浮提示中。
+  const separator = page.title.indexOf('：');
+  appendRepoWikiHighlightedText(name, separator > 0 ? page.title.slice(0, separator) : page.title, state.repowiki.navQuery);
+  title.appendChild(name);
+  if (separator > 0 && page.title.slice(separator + 1).trim()) {
+    const summary = document.createElement('span');
+    summary.className = 'repowiki-nav-summary';
+    appendRepoWikiHighlightedText(summary, page.title.slice(separator + 1).trim(), state.repowiki.navQuery);
+    title.appendChild(summary);
+  }
+  const icon = document.createElement('span');
+  icon.className = `repowiki-node-icon ${hasChildren ? 'folder' : 'document'}`;
+  icon.setAttribute('aria-hidden', 'true');
+  icon.innerHTML = hasChildren
+    ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h4l2 3h8a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/><path d="M3 9h18"/></svg>'
+    : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9Z"/><path d="M14 3v6h6M8 13h8M8 17h5"/></svg>';
   const review = document.createElement('span');
   // v2 无 per-page review 数据时缺省 unknown（显示 '—'），不依赖固定页集、不报错。
   const reviewState = ['reviewed', 'unreviewed', 'stale'].includes(reviewPages?.[page.page_id])
@@ -1090,20 +1527,234 @@ function buildRepoWikiNavRow(page, depth, hasChildren, isExpanded, reviewPages) 
     : 'unknown';
   review.className = `repowiki-review-dot ${reviewState}`;
   review.textContent = {
-    reviewed: '已审', unreviewed: '未审', stale: '过期', unknown: '—'
+    reviewed: uiText('已审'), unreviewed: uiText('未审'), stale: uiText('过期'), unknown: '—'
   }[reviewState];
-  button.append(title, review);
-  row.appendChild(button);
+  button.append(icon, title, review);
+  line.appendChild(button);
+  row.appendChild(line);
   return row;
 }
 
 // 展开/收起某个父节点，仅改折叠状态后重渲染（不触发任何 IPC）。
 function toggleRepoWikiNavNode(pageId) {
-  if (!state.repowiki.pageIds.has(pageId)) return;
+  if (!state.repowiki.pageIds.has(pageId) || state.repowiki.navQuery.trim()) return;
+  const nav = document.getElementById('repowiki-page-nav');
+  const scrollPane = nav.closest('.repowiki-page-nav');
+  const scrollTop = scrollPane.scrollTop;
+  const restoreFocus = document.activeElement?.dataset.togglePageId === pageId;
   const expanded = state.repowiki.expandedPageIds;
   if (expanded.has(pageId)) expanded.delete(pageId);
   else expanded.add(pageId);
   renderRepoWikiPageNav(state.repowiki.status?.review?.pages || {});
+  if (restoreFocus) {
+    [...nav.querySelectorAll('[data-toggle-page-id]')]
+      .find(button => button.dataset.togglePageId === pageId)?.focus({ preventScroll: true });
+  }
+  scrollPane.scrollTop = scrollTop;
+}
+
+// 搜索只使用已载入的标题和当前正文，不调用 IPC 或创建持久索引。
+function filterRepoWikiNavigation(pages, value) {
+  const query = String(value || '').trim().toLowerCase();
+  if (!query) return null;
+  const index = new Map(pages.map(page => [page.page_id, page]));
+  const matches = new Set(), visible = new Set(), ancestors = new Set();
+  for (const page of pages) {
+    if (!page.title.toLowerCase().includes(query)) continue;
+    matches.add(page.page_id);
+    visible.add(page.page_id);
+    const visited = new Set([page.page_id]);
+    let parent = index.get(page.parent_page_id);
+    while (parent && !visited.has(parent.page_id)) {
+      visited.add(parent.page_id);
+      visible.add(parent.page_id);
+      ancestors.add(parent.page_id);
+      parent = index.get(parent.parent_page_id);
+    }
+  }
+  return { matches, visible, ancestors };
+}
+
+function findRepoWikiTextRanges(text, value, limit = 1000) {
+  const query = String(value || '').trim();
+  const ranges = [];
+  if (!query) return { ranges, truncated: false };
+  // 用户输入是字面文字；转义正则元字符，并使用匹配本身的长度保留 Unicode 偏移。
+  const pattern = new RegExp(query.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&'), 'giu');
+  for (const match of text.matchAll(pattern)) {
+    if (ranges.length >= limit) return { ranges, truncated: true };
+    ranges.push({ start: match.index, end: match.index + match[0].length });
+  }
+  return { ranges, truncated: false };
+}
+
+function appendRepoWikiHighlightedText(element, text, query) {
+  const { ranges } = findRepoWikiTextRanges(text, query);
+  let offset = 0;
+  for (const range of ranges) {
+    element.append(document.createTextNode(text.slice(offset, range.start)));
+    const mark = document.createElement('mark');
+    mark.className = 'repowiki-nav-hit';
+    mark.textContent = text.slice(range.start, range.end);
+    element.append(mark);
+    offset = range.end;
+  }
+  element.append(document.createTextNode(text.slice(offset)));
+}
+
+function bindRepoWikiSearch() {
+  const navInput = document.getElementById('repowiki-nav-query');
+  const findInput = document.getElementById('repowiki-find-query');
+  const debounceInput = (input, callback) => {
+    let timer, composing = false;
+    const schedule = () => {
+      clearTimeout(timer);
+      if (!composing) timer = setTimeout(callback, 160);
+    };
+    input.addEventListener('compositionstart', () => { composing = true; clearTimeout(timer); });
+    input.addEventListener('compositionend', () => { composing = false; schedule(); });
+    input.addEventListener('input', schedule);
+  };
+  const filterNav = () => {
+    if (state.repowiki.navQuery === navInput.value) return;
+    state.repowiki.navQuery = navInput.value;
+    renderRepoWikiPageNav(state.repowiki.status?.review?.pages || {});
+    document.querySelector('.repowiki-page-nav').scrollTop = 0;
+  };
+  const clearNav = () => { navInput.value = ''; filterNav(); navInput.focus(); };
+  debounceInput(navInput, filterNav);
+  document.getElementById('btn-repowiki-nav-clear').addEventListener('click', clearNav);
+  navInput.addEventListener('keydown', event => {
+    if (event.isComposing) return;
+    if (event.key === 'Escape') { event.preventDefault(); clearNav(); }
+    if (event.key === 'Enter') { event.preventDefault(); filterNav(); }
+  });
+  debounceInput(findInput, updateRepoWikiDocumentSearch);
+  const clearFind = () => { clearRepoWikiDocumentSearch(); findInput.focus(); };
+  document.getElementById('btn-repowiki-find-clear').addEventListener('click', clearFind);
+  document.getElementById('btn-repowiki-find-prev').addEventListener('click', () => moveRepoWikiFind(-1));
+  document.getElementById('btn-repowiki-find-next').addEventListener('click', () => moveRepoWikiFind(1));
+  findInput.addEventListener('keydown', event => {
+    if (event.isComposing) return;
+    if (event.key === 'Escape') { event.preventDefault(); clearFind(); }
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      if (findInput.value.trim() !== state.repowiki.findQuery) updateRepoWikiDocumentSearch();
+      else moveRepoWikiFind(event.shiftKey ? -1 : 1);
+    }
+  });
+  document.addEventListener('keydown', event => {
+    if (state.activeTab !== 'repowiki' || event.defaultPrevented || event.isComposing || event.altKey) return;
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f' && !findInput.disabled) {
+      event.preventDefault();
+      findInput.focus();
+      findInput.select();
+    }
+  });
+}
+
+function removeRepoWikiFindHighlights() {
+  const body = document.querySelector('#repowiki-article .repowiki-markdown');
+  if (body) {
+    for (const mark of body.querySelectorAll('mark.repowiki-find-hit')) {
+      mark.replaceWith(document.createTextNode(mark.textContent));
+    }
+    body.normalize();
+  }
+  state.repowiki.findMatches = [];
+  state.repowiki.findIndex = -1;
+  state.repowiki.findTruncated = false;
+}
+
+function clearRepoWikiDocumentSearch(ready = state.repowiki.documentReady) {
+  removeRepoWikiFindHighlights();
+  state.repowiki.documentReady = ready;
+  state.repowiki.findQuery = '';
+  document.getElementById('repowiki-find-query').value = '';
+  renderRepoWikiFindControls();
+}
+
+function renderRepoWikiFindControls() {
+  const rw = state.repowiki;
+  const count = rw.findMatches.length;
+  document.getElementById('repowiki-find-query').disabled = !rw.documentReady;
+  document.getElementById('btn-repowiki-find-prev').disabled = count === 0;
+  document.getElementById('btn-repowiki-find-next').disabled = count === 0;
+  document.getElementById('btn-repowiki-find-clear').disabled = !rw.findQuery;
+  document.getElementById('repowiki-find-count').textContent = !rw.documentReady ? uiText('请先打开文档')
+    : !rw.findQuery ? uiText('文档内查找')
+      : count ? (rw.findIndex + 1) + ' / ' + count + (rw.findTruncated ? '+' : '') : uiText('无匹配');
+  document.getElementById('repowiki-find-count').title = rw.findTruncated ? uiText('最多高亮前 1000 处，请缩小关键词范围') : '';
+}
+
+function updateRepoWikiDocumentSearch() {
+  const rw = state.repowiki;
+  const query = document.getElementById('repowiki-find-query').value.trim();
+  // Enter 可提前执行查找；随后到达的同词防抖回调不能把用户已跳转的位置重置。
+  if (query === rw.findQuery) return;
+  removeRepoWikiFindHighlights();
+  rw.findQuery = query;
+  const body = document.querySelector('#repowiki-article .repowiki-markdown');
+  if (!query || !rw.documentReady || !body) { renderRepoWikiFindControls(); return; }
+  // 同一段落内可跨 strong/code/链接匹配；不同段落、单元格或图形文字不拼接。
+  const groups = [];
+  const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      return node.parentElement.closest('svg,script,style,[hidden]') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
+    },
+  });
+  let node, previousBlock;
+  while ((node = walker.nextNode())) {
+    const block = node.parentElement.closest('p,li,h1,h2,h3,h4,h5,h6,td,th,pre,blockquote') || body;
+    if (block !== previousBlock) { groups.push({ text: '', nodes: [] }); previousBlock = block; }
+    const group = groups[groups.length - 1];
+    group.nodes.push({ node, start: group.text.length, end: group.text.length + node.data.length });
+    group.text += node.data;
+  }
+  const plans = new Map();
+  for (const group of groups) {
+    const found = findRepoWikiTextRanges(group.text, query, 1000 - rw.findMatches.length);
+    for (const range of found.ranges) {
+      const match = [];
+      rw.findMatches.push(match);
+      for (const part of group.nodes) {
+        const start = Math.max(range.start, part.start), end = Math.min(range.end, part.end);
+        if (start >= end) continue;
+        if (!plans.has(part.node)) plans.set(part.node, []);
+        plans.get(part.node).push({ start: start - part.start, end: end - part.start, match });
+      }
+    }
+    if (found.truncated) { rw.findTruncated = true; break; }
+  }
+  // 倒序拆分每个文本节点，保证尚未处理的偏移仍然有效；绝不把输入写入 HTML。
+  for (const [textNode, segments] of plans) {
+    for (const segment of segments.reverse()) {
+      const matched = textNode.splitText(segment.start);
+      matched.splitText(segment.end - segment.start);
+      const mark = document.createElement('mark');
+      mark.className = 'repowiki-find-hit';
+      mark.textContent = matched.data;
+      matched.replaceWith(mark);
+      segment.match.push(mark);
+    }
+  }
+  if (rw.findMatches.length) moveRepoWikiFind(1);
+  else renderRepoWikiFindControls();
+}
+
+function moveRepoWikiFind(direction) {
+  const rw = state.repowiki, count = rw.findMatches.length;
+  if (!count) return;
+  for (const mark of rw.findMatches[rw.findIndex] || []) mark.classList.remove('current');
+  rw.findIndex = (rw.findIndex + direction + count) % count;
+  const match = rw.findMatches[rw.findIndex];
+  for (const mark of match) mark.classList.add('current');
+  const target = match[0], article = document.getElementById('repowiki-article');
+  const bounds = article.getBoundingClientRect(), location = target.getBoundingClientRect();
+  article.scrollTop += location.top - bounds.top - article.clientHeight * .35;
+  const code = target.closest('pre');
+  if (code) code.scrollLeft += location.left - code.getBoundingClientRect().left - 24;
+  renderRepoWikiFindControls();
 }
 
 // 剥掉页面 md 开头一行 <!-- repowiki:page-meta {...} --> 注释，避免其被渲染进正文。
@@ -1121,31 +1772,32 @@ async function loadRepoWikiPage(pageId, expectedProjectSerial = state.repowiki.r
   const selector = selectedRepoWikiSelector();
   if (!selector) return;
   state.repowiki.currentPageId = pageId;
+  clearRepoWikiDocumentSearch(false);
   renderRepoWikiPageNav(state.repowiki.status?.review?.pages || {});
   const article = document.getElementById('repowiki-article');
-  article.innerHTML = emptyStateHtml('正在读取页面', '正文将由 RepoWiki 校验正式代次和内容哈希后返回。');
+  article.innerHTML = emptyStateHtml(uiText('正在读取页面'), uiText('正文将由 RepoWiki 校验正式代次和内容哈希后返回。'));
   try {
     const envelope = await invoke('repowiki_read_page', { selector, pageId });
     const page = unwrapRepoWikiEnvelope(envelope, 'read page');
     if (expectedProjectSerial !== state.repowiki.requestSerial || state.repowiki.currentPageId !== pageId) return;
     if (page.page_id !== pageId || typeof page.content !== 'string') {
-      throw Object.assign(new Error('[repowiki_protocol_violation] Wiki 页面响应不匹配'), { code: 'repowiki_protocol_violation' });
+      throw Object.assign(new Error(uiText('[repowiki_protocol_violation] Wiki 页面响应不匹配')), { code: 'repowiki_protocol_violation' });
     }
     const content = stripRepoWikiPageMeta(page.content);
-    article.innerHTML = `<header class="repowiki-article-head">
+    article.innerHTML = uiTemplate`<header class="repowiki-article-head">
       <div><h1>${escapeHtml(page.title || page.page_id)}</h1><code>${escapeHtml(page.page_id)}</code></div>
       <span class="badge info" title="${escapeHtml(page.wiki_generation_id || '')}">代次 ${escapeHtml(shortRepoWikiId(page.wiki_generation_id))}</span>
     </header>
     <div class="repowiki-markdown">${renderSafeWikiMarkdown(content)}</div>`;
+    clearRepoWikiDocumentSearch(true);
   } catch (error) {
     if (expectedProjectSerial !== state.repowiki.requestSerial || state.repowiki.currentPageId !== pageId) return;
-    article.innerHTML = emptyStateHtml('页面读取失败', repoWikiErrorMessage(error));
+    article.innerHTML = emptyStateHtml(uiText('页面读取失败'), repoWikiErrorMessage(error));
   }
-  // Wiki 正文与概览共用主区滚动；切页后定位新正文，旧项目/页面响应不能移动当前视图。
+  // 正文独立滚动；切页归顶，旧项目/页面响应不能移动当前阅读位置。
   if (state.activeTab === 'repowiki' && expectedProjectSerial === state.repowiki.requestSerial &&
       state.repowiki.currentPageId === pageId) {
-    const main = document.getElementById('main');
-    main.scrollTop += article.getBoundingClientRect().top - main.getBoundingClientRect().top - 16;
+    article.scrollTop = 0;
   }
 }
 
@@ -1219,7 +1871,7 @@ function renderWikiInline(text) {
   };
   let value = String(text ?? '');
   value = value.replace(/`([^`\n]+)`/g, (_match, code) => token(`<code>${escapeHtml(code)}</code>`));
-  value = value.replace(/!\[([^\]\n]*)\]\(([^)\n]*)\)/g, (_match, alt) => token(`<span class="wiki-blocked-image">${escapeHtml(alt || '[图片已移除]')}</span>`));
+  value = value.replace(/!\[([^\]\n]*)\]\(([^)\n]*)\)/g, (_match, alt) => token(`<span class="wiki-blocked-image">${escapeHtml(alt || uiText('[图片已移除]'))}</span>`));
   value = value.replace(/\[([^\]\n]+)\]\(([^)\n]+)\)/g, (_match, label, target) => {
     const pageId = repoWikiPageIdFromLink(target);
     return pageId
@@ -1227,7 +1879,7 @@ function renderWikiInline(text) {
       // 非站内页面（源码文件 / 站外地址）：只做不可点的引用样式。不画删除线——那会让
       // "指向源码的正常引用"看起来像失效内容。链接目标一律不落进 DOM（既有安全约束：
       // 渲染结果不得出现任何链接地址），故提示语固定、不带 target。
-      : token(`<span class="wiki-external-ref" title="该链接指向 Wiki 之外，不可在此打开">${escapeHtml(label)}</span>`);
+      : token(uiTemplate`<span class="wiki-external-ref" title="该链接指向 Wiki 之外，不可在此打开">${escapeHtml(label)}</span>`);
   });
   value = escapeHtml(value)
     .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
@@ -1377,7 +2029,7 @@ function renderMermaidFlowchart(source) {
   });
 
   return `<div class="repowiki-diagram"><svg viewBox="0 0 ${width} ${height}" width="${width}" height="${height}"`
-    + ` role="img" aria-label="流程图"><defs><marker id="${marker}" viewBox="0 0 10 10" refX="9" refY="5"`
+    + uiTemplate` role="img" aria-label="流程图"><defs><marker id="${marker}" viewBox="0 0 10 10" refX="9" refY="5"`
     + ` markerWidth="7" markerHeight="7" orient="auto-start-reverse">`
     + `<path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker></defs>`
     + `${edgeParts.join('')}${nodeParts.join('')}</svg></div>`;
@@ -1517,7 +2169,7 @@ async function searchRepoWikiGraph() {
   const input = document.getElementById('repowiki-graph-query');
   const text = (input.value || '').trim();
   if (!selector) {
-    document.getElementById('repowiki-graph-results').innerHTML = emptyStateHtml('没有可查询项目', '请先选择已登记项目。');
+    document.getElementById('repowiki-graph-results').innerHTML = emptyStateHtml(uiText('没有可查询项目'), uiText('请先选择已登记项目。'));
     return;
   }
   if (!text) {
@@ -1527,7 +2179,7 @@ async function searchRepoWikiGraph() {
   const serial = state.repowiki.requestSerial;
   const graphSerial = ++state.repowiki.graphRequestSerial;
   const results = document.getElementById('repowiki-graph-results');
-  results.innerHTML = emptyStateHtml('正在搜索', '正在执行有界、只读的固定图查询。');
+  results.innerHTML = emptyStateHtml(uiText('正在搜索'), uiText('正在执行有界、只读的固定图查询。'));
   try {
     const envelope = await invoke('repowiki_graph_search', { selector, text, limit: 20 });
     const result = unwrapRepoWikiEnvelope(envelope, 'graph search');
@@ -1535,7 +2187,7 @@ async function searchRepoWikiGraph() {
     renderRepoWikiGraphResult(result, 'search', repoWikiWarnings(envelope));
   } catch (error) {
     if (serial !== state.repowiki.requestSerial || graphSerial !== state.repowiki.graphRequestSerial) return;
-    results.innerHTML = emptyStateHtml('图搜索失败', repoWikiErrorMessage(error));
+    results.innerHTML = emptyStateHtml(uiText('图搜索失败'), repoWikiErrorMessage(error));
   }
 }
 
@@ -1552,7 +2204,7 @@ async function runRepoWikiGraphOperation(action, nodeId) {
   const serial = state.repowiki.requestSerial;
   const graphSerial = ++state.repowiki.graphRequestSerial;
   const results = document.getElementById('repowiki-graph-results');
-  results.innerHTML = emptyStateHtml('正在查询关系', '正在执行固定、只读且有深度/数量上限的图查询。');
+  results.innerHTML = emptyStateHtml(uiText('正在查询关系'), uiText('正在执行固定、只读且有深度/数量上限的图查询。'));
   const args = action === 'show'
     ? { selector, nodeId }
     : { selector, nodeId, depth: 2, limit: 50 };
@@ -1563,7 +2215,7 @@ async function runRepoWikiGraphOperation(action, nodeId) {
     renderRepoWikiGraphResult(result, action, repoWikiWarnings(envelope));
   } catch (error) {
     if (serial !== state.repowiki.requestSerial || graphSerial !== state.repowiki.graphRequestSerial) return;
-    results.innerHTML = emptyStateHtml('关系查询失败', repoWikiErrorMessage(error));
+    results.innerHTML = emptyStateHtml(uiText('关系查询失败'), repoWikiErrorMessage(error));
   }
 }
 
@@ -1572,9 +2224,9 @@ function renderRepoWikiGraphNode(node) {
   const nodeId = typeof node.node_id === 'string' && REPOWIKI_NODE_ID.test(node.node_id)
     ? node.node_id
     : '';
-  const name = node.qualified_name || node.name || '(未命名节点)';
+  const name = node.qualified_name || node.name || uiText('(未命名节点)');
   const location = [node.path || '', Number.isFinite(Number(node.line)) ? `:${Number(node.line)}` : ''].join('');
-  const actions = nodeId ? `<div class="repowiki-node-actions">
+  const actions = nodeId ? uiTemplate`<div class="repowiki-node-actions">
     <button type="button" class="btn ghost" data-graph-action="show" data-node-id="${nodeId}">详情</button>
     <button type="button" class="btn ghost" data-graph-action="callers" data-node-id="${nodeId}">调用者</button>
     <button type="button" class="btn ghost" data-graph-action="callees" data-node-id="${nodeId}">被调用者</button>
@@ -1584,9 +2236,9 @@ function renderRepoWikiGraphNode(node) {
     <div class="repowiki-node-main">
       <strong>${escapeHtml(name)}</strong>
       <span class="badge info">${escapeHtml(node.kind || 'node')}</span>
-      ${node.hop != null ? `<span class="badge mute">${escapeHtml(node.hop)} 跳</span>` : ''}
+      ${node.hop != null ? uiTemplate`<span class="badge mute">${escapeHtml(node.hop)} 跳</span>` : ''}
     </div>
-    <code title="${escapeHtml(location)}">${escapeHtml(location || '未知位置')}</code>
+    <code title="${escapeHtml(location)}">${escapeHtml(location || uiText('未知位置'))}</code>
     ${actions}
   </div>`;
 }
@@ -1598,7 +2250,7 @@ function renderRepoWikiEdges(edges) {
     <span>${escapeHtml(edge?.type || 'RELATION')}</span>
     <code>${escapeHtml(shortRepoWikiId(edge?.target_id))}</code>
   </li>`).join('');
-  return `<details class="repowiki-edges"><summary>关系边 ${edges.length} 条</summary><ul>${rows}</ul></details>`;
+  return uiTemplate`<details class="repowiki-edges"><summary>关系边 ${edges.length} 条</summary><ul>${rows}</ul></details>`;
 }
 
 function renderRepoWikiGraphResult(result, operation, warnings = []) {
@@ -1608,13 +2260,13 @@ function renderRepoWikiGraphResult(result, operation, warnings = []) {
     : (Array.isArray(result?.nodes) ? result.nodes : []);
   const edges = Array.isArray(result?.edges) ? result.edges : [];
   if (!nodes.length && !edges.length) {
-    results.innerHTML = emptyStateHtml('没有匹配结果', '换一个更精确的函数名、类名或项目相对路径再试。');
+    results.innerHTML = emptyStateHtml(uiText('没有匹配结果'), uiText('换一个更精确的函数名、类名或项目相对路径再试。'));
     return;
   }
-  const labels = { search: '搜索结果', show: '节点详情', callers: '调用者', callees: '被调用者', impact: '影响面' };
-  results.innerHTML = `<div class="repowiki-result-head">
-      <strong>${escapeHtml(labels[operation] || '图查询结果')}</strong>
-      <span>${nodes.length} 个节点${result?.truncated ? ' · 已按上限截断' : ''}</span>
+  const labels = { search: uiText('搜索结果'), show: uiText('节点详情'), callers: uiText('调用者'), callees: uiText('被调用者'), impact: uiText('影响面') };
+  results.innerHTML = uiTemplate`<div class="repowiki-result-head">
+      <strong>${escapeHtml(labels[operation] || uiText('图查询结果'))}</strong>
+      <span>${nodes.length} 个节点${result?.truncated ? uiText(' · 已按上限截断') : ''}</span>
     </div>
     ${warnings.length ? `<div class="banner warn">${escapeHtml(warnings.join('；'))}</div>` : ''}
     <div class="repowiki-node-list">${nodes.map(renderRepoWikiGraphNode).join('')}</div>
@@ -1651,7 +2303,7 @@ async function manualSync() {
   btn.disabled = true;
   const status = document.getElementById('sync-status');
   status.classList.remove('error', 'stale');
-  status.textContent = '同步中…';
+  status.textContent = uiText('同步中…');
   // 决策 6：手动同步是全库采集，可能耗时十几秒；超时阈值 15s（原 5s 会误判长采集卡死）。
   // P2：watchdog 覆盖「invoke + refreshAll」全程——invoke 返回后 refreshAll 仍可能挂起，
   // 提前 clearTimeout 会让"同步中…"永久卡住且无卡死提示，故 clearTimeout 统一放 finally。
@@ -1662,11 +2314,11 @@ async function manualSync() {
     status.classList.add('error');
     status.replaceChildren();
     const warn = document.createElement('span');
-    warn.textContent = 'App 可能卡死，请重启 ';
+    warn.textContent = uiText('App 可能卡死，请重启 ');
     const restartBtn = document.createElement('button');
     restartBtn.type = 'button';
     restartBtn.className = 'btn ghost';
-    restartBtn.textContent = '重启 App';
+    restartBtn.textContent = uiText('重启 App');
     restartBtn.addEventListener('click', () => { window.location.reload(); });
     status.append(warn, restartBtn);
   }, 15000);
@@ -1689,7 +2341,7 @@ async function manualSync() {
     if (!state.syncRecordWarning) await refreshSyncStatus(true);
     await refreshAll();
   } catch (e) {
-    state.syncStatus.error = '跨机同步失败：' + e;
+    setSyncError(state.syncStatus, () => uiText('跨机同步失败：') + e);
   } finally {
     clearTimeout(timeoutId); // P2：invoke + refreshAll 全程走完才清 watchdog
     state.syncInProgress = false;
@@ -1702,21 +2354,21 @@ async function manualSync() {
 // notice（未配置 / 推送失败等"非成功结局"）优先于 last——否则后续任意 refreshAll 会用旧 last
 // 把失败态复活成「最后同步 X 分钟前」假成功。notice 由 manualSync 按 outcome 落 state。
 function computeSyncStatusView(syncStatus, nowMs) {
-  if (syncStatus?.error) return { text: syncStatus.error, stale: false, error: true };
+  if (syncStatus?.error) return { text: syncStatus.errorRenderer ? syncStatus.errorRenderer() : uiText(syncStatus.error), stale: false, error: true };
   if (syncStatus && syncStatus.notice) {
-    return { text: syncStatus.notice, stale: true };
+    return { text: uiText(syncStatus.notice), stale: true };
   }
   if (!syncStatus || !syncStatus.last) {
-    return { text: '跨机同步：暂无同步记录', stale: false };
+    return { text: uiText('跨机同步：暂无同步记录'), stale: false };
   }
   const time = syncStatus.last.getTime();
-  if (!Number.isFinite(time)) return { text: '同步记录时间无效，请重新读取', stale: false, error: true };
+  if (!Number.isFinite(time)) return { text: uiText('同步记录时间无效，请重新读取'), stale: false, error: true };
   const ago = Math.max(0, Math.round((nowMs - time) / 60000));
   if (ago > 360) {
     // 决策 5：6h 自动周期已删，去「周期触发上限」措辞，只保留"数据偏旧、建议手动同步"的陈旧提示
-    return { text: `上次跨机同步成功：${ago} 分钟前 · 数据偏旧，建议手动同步`, stale: true };
+    return { text: uiTemplate`上次跨机同步成功：${ago} 分钟前 · 数据偏旧，建议手动同步`, stale: true };
   }
-  return { text: `上次跨机同步成功：${ago} 分钟前`, stale: false };
+  return { text: uiTemplate`上次跨机同步成功：${ago} 分钟前`, stale: false };
 }
 
 async function refreshSyncStatus(duringSync = false) {
@@ -1729,7 +2381,7 @@ async function refreshSyncStatus(duringSync = false) {
     switch (record?.last_attempt?.outcome) {
       case 'push-failed': next.notice = '已本地保存·推送失败·下次重试'; break;
       case 'unconfigured': next.notice = '未配置存储仓，未触发同步'; break;
-      case 'failed': next.error = '上次跨机同步失败，请重试'; break;
+      case 'failed': next.error = uiText('上次跨机同步失败，请重试'); break;
       case 'succeeded': break;
       default:
         // 当前操作已给出失败/未配置时，缺失的历史不能清除本次确定的结果。
@@ -1737,7 +2389,7 @@ async function refreshSyncStatus(duringSync = false) {
     }
     state.syncStatus = next;
   } catch (e) {
-    if (serial === state.syncStatusRequestSerial) state.syncStatus.error = '同步记录读取失败：' + e;
+    if (serial === state.syncStatusRequestSerial) setSyncError(state.syncStatus, () => uiText('同步记录读取失败：') + e);
   }
 }
 
@@ -1827,6 +2479,7 @@ function renderSessions() {
   // 后端已按 query 过滤 + 分页 slice，前端不再二次过滤
   const view = activeSessionView();
   const notice = document.getElementById('session-notice');
+  if (view.notice && view.noticeRenderer) view.notice = view.noticeRenderer();
   if (notice) { notice.textContent = view.notice; notice.classList.toggle('hidden', !view.notice); }
   const tbody = document.querySelector('#session-table tbody');
   // 重绘只接续当前仍在本表内的焦点；异步返回不能抢走用户已移到搜索框等处的焦点。
@@ -1843,13 +2496,13 @@ function renderSessions() {
     const hasTitle = s.title && s.title !== s.session_id;
     const titleCell = hasTitle
       ? escapeHtml(s.title)
-      : `<span style="color:var(--text-mute);">[无标题] ${escapeHtml(s.session_id.slice(0, 8))}</span>`;
+      : uiTemplate`<span style="color:var(--text-mute);">[无标题] ${escapeHtml(s.session_id.slice(0, 8))}</span>`;
 
     // 图标独占一个布局盒；以可访问状态控制实心/空心，避免伪元素与旧字形排成两行。
-    const favoriteLabel = s.favorited ? '取消收藏' : '收藏';
+    const favoriteLabel = s.favorited ? uiText('取消收藏') : uiText('收藏');
     const favoriteBtn = `<button type="button" class="btn-favorite" data-session-id="${escapeHtml(s.session_id)}" title="${favoriteLabel}" aria-label="${favoriteLabel}" aria-pressed="${s.favorited}" aria-disabled="${view.pendingFavorites.has(s.session_id)}"><svg class="favorite-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 2 3 6.5 7 1-5 5 1.2 7L12 18l-6.2 3.5 1.2-7-5-5 7-1z"/></svg></button>`;
 
-    const hideLabel = view.visibility === 'hidden' ? '恢复显示' : '隐藏';
+    const hideLabel = view.visibility === 'hidden' ? uiText('恢复显示') : uiText('隐藏');
     const hideIcon = view.visibility === 'hidden' ? 'show' : 'hide';
     const hideBtn = `<button type="button" class="btn-session-visibility" data-visibility-id="${escapeHtml(s.session_id)}" title="${hideLabel}" aria-label="${hideLabel}" aria-disabled="${view.pendingHidden.has(s.session_id)}"><span class="session-visibility-icon ${hideIcon}" aria-hidden="true"></span></button>`;
     tr.innerHTML = `
@@ -1876,11 +2529,11 @@ function renderSessions() {
     tbody.appendChild(tr);
   }
   if (view.loading && view.items.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--text-mute);">（${escapeHtml(sessionSourceLabel(state.sessionSource))} · 读取中…）</td></tr>`;
+    tbody.innerHTML = uiTemplate`<tr><td colspan="7" style="text-align:center;color:var(--text-mute);">（${escapeHtml(sessionSourceLabel(state.sessionSource))} · 读取中…）</td></tr>`;
   } else if (view.error) {
-    tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--danger);">读取 ${escapeHtml(sessionSourceLabel(state.sessionSource))} 会话失败：${escapeHtml(view.error)}</td></tr>`;
+    tbody.innerHTML = uiTemplate`<tr><td colspan="7" style="text-align:center;color:var(--danger);">读取 ${escapeHtml(sessionSourceLabel(state.sessionSource))} 会话失败：${escapeHtml(view.error)}</td></tr>`;
   } else if (view.items.length === 0) {
-    const suffix = view.query.trim() ? '无匹配会话' : view.visibility === 'hidden' ? '没有已隐藏会话' : '暂无活动会话，可切换到“已隐藏”查看';
+    const suffix = view.query.trim() ? uiText('无匹配会话') : view.visibility === 'hidden' ? uiText('没有已隐藏会话') : uiText('暂无活动会话，可切换到“已隐藏”查看');
     tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--text-mute);">（${escapeHtml(sessionSourceLabel(state.sessionSource))} · ${suffix}）</td></tr>`;
   }
   if (focusKey && state.activeTab === 'sessions') {
@@ -1895,7 +2548,7 @@ function renderPagination() {
   const start = total === 0 ? 0 : (page - 1) * pageSize + 1;
   const end = Math.min(page * pageSize, total);
   document.getElementById('session-pagination-info').textContent =
-    total === 0 ? '共 0 条' : `第 ${start}-${end} 条 / 共 ${total} 条`;
+    total === 0 ? uiText('共 0 条') : uiTemplate`第 ${start}-${end} 条 / 共 ${total} 条`;
 
   const pages = document.getElementById('session-pagination-pages');
   pages.innerHTML = '';
@@ -1922,6 +2575,138 @@ function renderPagination() {
   pages.appendChild(btn('»', totalPages, page === totalPages));
 }
 
+function getResumeCmdPreview(source, sid) {
+  if (source === 'claude-cli') return `claude --resume ${sid}`;
+  if (source === 'codex') return `codex resume ${sid}`;
+  if (source === 'pi') return `pi --session ${sid}`;
+  if (source === 'grok') return `grok --resume ${sid}`;
+  if (source === 'opencode') return `opencode --session ${sid}`;
+  if (source === 'antigravity') return `agy --conversation ${sid}`;
+  return '';
+}
+
+function renderSessionInspector(session, detail, source, loading = false, err = null) {
+  state.sessionPresentation = [session, detail, source, loading, err];
+  const inspector = document.getElementById('session-inspector');
+  if (!inspector) return;
+  const resumeCmd = getResumeCmdPreview(source, session.session_id);
+  const copyLabel = resumeCmd ? uiText('复制恢复命令') : uiText('复制会话 ID');
+  const summaryOnly = source === 'antigravity';
+  const title = session.title && session.title !== session.session_id ? session.title : uiTemplate`[无标题会话] ${session.session_id.slice(0, 8)}`;
+
+  if (loading) {
+    inspector.innerHTML = uiTemplate`
+      <div class="inspector-head">
+        <div class="inspector-title-row">
+          <div class="inspector-title-wrap">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+              <span class="proj-pill">${escapeHtml(session.projects || sessionSourceLabel(source))}</span>
+              <span class="session-item-time mono">${escapeHtml(relTime(session.mtime))}</span>
+            </div>
+            <div class="inspector-title">${escapeHtml(title)}</div>
+          </div>
+        </div>
+      </div>
+      <div class="inspector-body" style="padding:48px 24px;text-align:center;color:var(--text-mute);">
+        <div style="font-size:13px;font-weight:600;margin-bottom:6px;">读取会话详情与对话流中…</div>
+        <div style="font-size:11.5px;">正在读取近期对话与改动文件</div>
+      </div>
+    `;
+    return;
+  }
+
+  if (err) {
+    inspector.innerHTML = uiTemplate`
+      <div class="inspector-head">
+        <div class="inspector-title-wrap">
+          <div class="inspector-title" style="color:var(--danger);">${escapeHtml(title)}</div>
+        </div>
+      </div>
+      <div class="inspector-body" style="padding:24px;">
+        <div class="banner err">加载详情失败: ${escapeHtml(String(err))}</div>
+      </div>
+    `;
+    return;
+  }
+
+  const files = detail?.files || [];
+  const filesHtml = files.length
+    ? files.map(f => `<span class="file-chip mono" title="${escapeHtml(f)}">${escapeHtml(f)}</span>`).join('')
+    : uiText('<span class="muted" style="font-size:11.5px;">无直接改动文件记录</span>');
+
+  const msgsHtml = summaryOnly
+    ? `<div class="session-summary">${escapeHtml(detail?.summary || uiText('此会话暂无摘要。'))}</div>`
+    : detail?.preview?.length
+    ? renderDialogMarkdown(detail.preview)
+    : uiTemplate`<div class="empty-state compact" style="text-align:center;padding:24px 12px;color:var(--text-mute);">
+        <div class="empty-title" style="font-size:13px;font-weight:600;margin-bottom:4px;color:var(--text-0);">无近期对话预览</div>
+        <div class="empty-hint" style="font-size:11.5px;">本次读取范围中没有可显示的对话，请在原工具中查看完整记录。</div>
+      </div>`;
+
+  inspector.innerHTML = uiTemplate`
+    <div class="inspector-head">
+      <div class="inspector-title-row">
+        <div class="inspector-title-wrap">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+            <span class="proj-pill">${escapeHtml(session.projects || sessionSourceLabel(source))}</span>
+            <span class="session-item-time mono">${escapeHtml(relTime(session.mtime))}</span>
+          </div>
+          <div class="inspector-title">${escapeHtml(title)}</div>
+        </div>
+      </div>
+
+      <!-- 方案 D 标志性：一键断点续命触感卡片 -->
+      <button type="button" class="cmd-strip" id="insp-copy-resume" title="${copyLabel}" style="cursor:pointer;">
+        <span style="display:flex;flex-direction:column;gap:3px;min-width:0;">
+          <span style="font-size:10.5px;color:var(--text-mute);font-weight:600;letter-spacing:0.04em;">${copyLabel}</span>
+          <code class="mono" style="color:var(--accent);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(resumeCmd || session.session_id)}</code>
+        </span>
+        <span class="cmd-copy-hint" style="flex-shrink:0;">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          <span id="insp-copy-status">复制</span>
+        </span>
+      </button>
+
+      <div class="inspector-meta-bar">
+        <span title="完整 Session ID"><strong style="color:var(--text-mute);">SID:</strong> <code class="mono" style="user-select:all;font-size:11px;">${escapeHtml(session.session_id)}</code></span>
+        ${session.cwd ? uiTemplate`<span title="工作目录"><strong style="color:var(--text-mute);">cwd:</strong> <code class="mono" style="font-size:11px;">${escapeHtml(session.cwd)}</code></span>` : ''}
+      </div>
+    </div>
+
+    <div class="inspector-body">
+      <details class="files-drawer" open>
+        <summary style="font-weight:600;color:var(--text-0);font-size:12.5px;">涉及变更文件 (${files.length})</summary>
+        <div class="files-grid" style="margin-top:10px;">
+          ${filesHtml}
+        </div>
+      </details>
+
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <div class="section-caption">${summaryOnly ? uiText('会话摘要') : uiText('最近对话')}</div>
+        ${detail?.notice ? `<p class="hint session-detail-notice">${escapeHtml(uiText(detail.notice))}</p>` : ''}
+        <div class="msg-list chat-stream">${msgsHtml}</div>
+      </div>
+    </div>
+  `;
+
+  const copyStrip = typeof inspector.querySelector === 'function'
+    ? inspector.querySelector('#insp-copy-resume')
+    : (typeof inspector.querySelectorAll === 'function' ? inspector.querySelectorAll('#insp-copy-resume')[0] : null);
+  if (copyStrip && typeof copyStrip.addEventListener === 'function') {
+    copyStrip.addEventListener('click', async () => {
+      const copied = await copyResumeCmd(source, session.session_id);
+      if (!copied || state.sessionDetailKey !== `${source}:${session.session_id}`) return;
+      const statusEl = typeof inspector.querySelector === 'function'
+        ? inspector.querySelector('#insp-copy-status')
+        : (typeof inspector.querySelectorAll === 'function' ? inspector.querySelectorAll('#insp-copy-status')[0] : null);
+      if (statusEl) {
+        statusEl.textContent = uiText('已复制!');
+        setTimeout(() => { if (statusEl) statusEl.textContent = uiText('复制'); }, 2000);
+      }
+    });
+  }
+}
+
 async function showSessionDetail(session) {
   const source = session.source || state.sessionSource;
   const detailKey = `${source}:${session.session_id}`;
@@ -1932,20 +2717,21 @@ async function showSessionDetail(session) {
   const extras = document.getElementById('drawer-extras');
   const body = document.getElementById('drawer-body');
   // extras 区域固定不滚：完整 session-id + 复制按钮
-  extras.innerHTML = `
+  extras.innerHTML = uiTemplate`
     <div class="form-row" style="margin-bottom:8px;">
       <label>完整 session-id</label>
       <code style="user-select:all;">${escapeHtml(session.session_id)}</code>
     </div>
     <div class="toolbar" style="margin:0;">
       <button class="btn primary" data-copy-source="${escapeHtml(source)}"
-              data-copy-sid="${escapeHtml(session.session_id)}">复制 resume 命令</button>
+              data-copy-sid="${escapeHtml(session.session_id)}">${getResumeCmdPreview(source, session.session_id) ? uiText("复制 resume 命令") : uiText("复制会话 ID")}</button>
     </div>
   `;
-  body.innerHTML = '<div class="dialog">加载中...</div>';
-  drawer.classList.add('open');
-  drawer.setAttribute('aria-hidden', 'false');
-  document.body.classList.add('drawer-open');
+  body.innerHTML = uiText('<div class="dialog">加载中...</div>');
+  const inline = !!document.getElementById('session-inspector');
+  drawer.classList.toggle('open', !inline);
+  drawer.setAttribute('aria-hidden', String(inline));
+  document.body.classList.toggle('drawer-open', !inline);
   // 复制按钮先绑定，不必等待详情解析完成。
   extras.querySelectorAll('[data-copy-sid]').forEach(btn => {
     btn.addEventListener('click', () => copyResumeCmd(
@@ -1953,26 +2739,36 @@ async function showSessionDetail(session) {
       btn.getAttribute('data-copy-sid'),
     ));
   });
+  renderSessionInspector(session, null, source, true);
   try {
     const detail = await invoke('session_detail', { source, sessionId: session.session_id });
     if (requestSerial !== state.sessionDetailRequestSerial || detailKey !== state.sessionDetailKey) return;
-    body.innerHTML = `
+    body.innerHTML = uiTemplate`
       <div class="form-row">
-        <label>最近 5 轮对话（1 轮 = 1 user + 1 assistant，取 tail 512KB 范围内）</label>
-        <div class="msg-list">${renderDialogMarkdown(detail?.preview || [])}</div>
+        <label>${source === 'antigravity' ? uiText('会话摘要') : uiText('近期对话预览')}</label>
+        ${detail?.notice ? `<p class="hint">${escapeHtml(uiText(detail.notice))}</p>` : ''}
+        ${source === 'antigravity' ? `<div class="session-summary">${escapeHtml(detail?.summary || uiText('暂无摘要'))}</div>` : ''}
+        <div class="msg-list">${source === 'antigravity' ? '' : detail?.preview?.length ? renderDialogMarkdown(detail.preview) : emptyStateHtml(
+          uiText('最近 512KB 中未找到可显示的对话'),
+          uiText('较早的对话可能超出预览范围。可点击上方“复制 resume 命令”，在原工具中查看完整会话。'),
+        )}</div>
       </div>
       <div class="form-row">
         <label>改过的文件</label>
         <div class="dialog">${(detail?.files || []).map(f => escapeHtml(f)).join('\n')}</div>
       </div>
     `;
+    renderSessionInspector(session, detail, source, false);
   } catch (e) {
     if (requestSerial !== state.sessionDetailRequestSerial || detailKey !== state.sessionDetailKey) return;
-    body.innerHTML = `<div class="banner err">加载详情失败: ${escapeHtml(String(e))}</div>`;
+    body.innerHTML = uiTemplate`<div class="banner err">加载详情失败: ${escapeHtml(String(e))}</div>`;
+    renderSessionInspector(session, null, source, false, e);
   }
 }
 
 function closeDrawer() {
+  state.sessionPresentation = null;
+  state.fleetPresentation = null;
   state.sessionDetailRequestSerial += 1;
   state.sessionDetailKey = '';
   const d = document.getElementById('drawer');
@@ -1983,6 +2779,10 @@ function closeDrawer() {
   // 关闭时清空 extras 段，避免下次打开残留上一次的 session-id / resume 按钮
   const extras = document.getElementById('drawer-extras');
   if (extras) extras.innerHTML = '';
+  for (const [id, label] of [['session-inspector', uiText('会话')], ['fleet-inspector', uiText('项目')]]) {
+    const inspector = document.getElementById(id);
+    if (inspector) inspector.innerHTML = emptyStateHtml(uiTemplate`未选择${label}`, uiTemplate`点击左侧${label}查看详情。`);
+  }
 }
 
 // v4.3.1：表格行选中高亮 —— 点击行打开详情时高亮当前行（先清同 tbody 其他选中），
@@ -1999,10 +2799,12 @@ function clearRowSelection() {
 
 async function copyResumeCmd(source, sid) {
   try {
-    const cmd = await invoke('copy_resume_command', { source, sessionId: sid });
+    if (!SESSION_SOURCE_IDS.includes(source) || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(sid)) throw new Error(uiText('无效会话来源或 ID'));
+    const cmd = getResumeCmdPreview(source, sid) ? await invoke('copy_resume_command', { source, sessionId: sid }) : sid;
     await navigator.clipboard.writeText(cmd);
-    flash('已复制：' + cmd);
-  } catch (e) { flash('复制失败：' + e, true); }
+    flash(uiText('已复制：') + cmd);
+    return true;
+  } catch (e) { flash(uiText('复制失败：') + e, true); return false; }
 }
 
 // -------- Fleet Board --------
@@ -2028,7 +2830,7 @@ function renderFleetBoard() {
   if (state.aggregateError) {
     const div = document.createElement('div');
     div.className = 'banner err';
-    div.innerHTML = `${ICON_ALERT_TRIANGLE}<span>读取跨机聚合失败：${escapeHtml(state.aggregateError)}（当前显示为上次成功读取的数据）</span>`;
+    div.innerHTML = uiTemplate`${ICON_ALERT_TRIANGLE}<span>读取跨机聚合失败：${escapeHtml(state.aggregateError)}（当前显示为上次成功读取的数据）</span>`;
     bans.appendChild(div);
   }
 
@@ -2041,7 +2843,7 @@ function renderFleetBoard() {
     const pairs = (c.verdict.differing_urls || [])
       .map(([uid, url]) => `${String(uid).slice(0, 8)}… → ${url}`)
       .join('；');
-    div.innerHTML = `${ICON_ALERT_TRIANGLE}<span><strong>URL→UUID 冲突</strong>：项目"${escapeHtml(c.name)}" 命中多个 UUID（${escapeHtml(pairs)}）。请去<strong>项目管理页</strong>删除冗余 UUID 恢复全局唯一 invariant。</span>`;
+    div.innerHTML = uiTemplate`${ICON_ALERT_TRIANGLE}<span><strong>URL→UUID 冲突</strong>：项目"${escapeHtml(c.name)}" 命中多个 UUID（${escapeHtml(pairs)}）。请去<strong>项目管理页</strong>删除冗余 UUID 恢复全局唯一 invariant。</span>`;
     bans.appendChild(div);
   }
   // 其他告警项目：分叉 / 双 dirty → 红条横幅（沿用旧文案）
@@ -2057,7 +2859,7 @@ function renderFleetBoard() {
   if (stale.length > 0) {
     const div = document.createElement('div');
     div.className = 'banner warn';
-    div.innerHTML = `${ICON_ALERT_CIRCLE}<span>${stale.length} 个项目的快照已超过 24 小时，请在对应机器采集并同步最新状态。</span>`;
+    div.innerHTML = uiTemplate`${ICON_ALERT_CIRCLE}<span>${stale.length} 个项目的快照已超过 24 小时，请在对应机器采集并同步最新状态。</span>`;
     bans.appendChild(div);
   }
 
@@ -2073,7 +2875,7 @@ function renderFleetBoard() {
   for (const agg of state.aggregate) {
     const tr = document.createElement('tr');
     if (agg.stale) tr.classList.add('stale');
-    const branchChips = renderChipList(agg.machines, (v) => v.project.branch, { valFallback: '(未 checkout)' });
+    const branchChips = renderChipList(agg.machines, (v) => v.project.branch, { valFallback: uiText('(未 checkout)') });
     const headChips = renderChipList(agg.machines, (v) => (v.project.head ? v.project.head.slice(0, 8) : null), { valFallback: '—' });
     // warnIf 改传 raw view 而非格式化字符串（对账 #8）—— 未来 formatDirty 改文案不会漏掉高亮
     const dirtyChips = renderChipList(agg.machines, (v) => formatDirty(v.project), {
@@ -2099,10 +2901,10 @@ function renderFleetBoard() {
 function formatDirty(p) {
   const d = Math.max(0, Number(p.dirty) || 0);
   const u = Math.max(0, Number(p.untracked) || 0);
-  if (d === 0 && u === 0) return '干净';
+  if (d === 0 && u === 0) return uiText('干净');
   const parts = [];
-  if (d > 0) parts.push(`已改 ${d}`);
-  if (u > 0) parts.push(`未跟踪 ${u}`);
+  if (d > 0) parts.push(uiTemplate`已改 ${d}`);
+  if (u > 0) parts.push(uiTemplate`未跟踪 ${u}`);
   return parts.join(' · ');
 }
 
@@ -2134,21 +2936,21 @@ function isMachineStale(machineUpdatedAt) {
 // v2，防信息墙）。files == null 表示该条未采文件级（仅前 5 条采）→ 返回空串。
 function commitFilesSummary(files) {
   if (files == null) return '';
-  if (files.length === 0) return '<span class="mute">无文件改动</span>';
+  if (files.length === 0) return uiText('<span class="mute">无文件改动</span>');
   let add = 0, del = 0;
   for (const f of files) {
     add += Number(f.additions) || 0; // 二进制文件 additions=null → 记 0
     del += Number(f.deletions) || 0;
   }
-  return `${files.length} 文件 <span class="commit-add">+${add}</span> <span class="commit-del">−${del}</span>`;
+  return uiTemplate`${files.length} 文件 <span class="commit-add">+${add}</span> <span class="commit-del">−${del}</span>`;
 }
 
 // v4.3+：drilldown 里每台机的「近 5 次提交」。三态对齐后端 recent_commits：
 // null/undefined=采集不可用（重新同步后可见）；[]=空仓；非空=列表（每条一行：短 sha + 标题 + 时间 + 文件汇总）。
 function renderRecentCommits(p) {
   const rc = p.recent_commits;
-  if (rc == null) return '<div class="commits-note mute">提交记录不可用（重新同步后可见）</div>';
-  if (rc.length === 0) return '<div class="commits-note mute">暂无提交</div>';
+  if (rc == null) return uiText('<div class="commits-note mute">提交记录不可用（重新同步后可见）</div>');
+  if (rc.length === 0) return uiText('<div class="commits-note mute">暂无提交</div>');
   const rows = rc.slice(0, 5).map((c) => {
     const sha = escapeHtml((c.sha_full || '').slice(0, 7));
     const subj = escapeHtml(c.subject || '');
@@ -2157,7 +2959,7 @@ function renderRecentCommits(p) {
     const meta = summary ? `${when} · ${summary}` : when;
     return `<li class="commit-row"><code class="commit-sha">${sha}</code><span class="commit-subj" title="${subj}">${subj}</span><span class="commit-meta mute">${meta}</span></li>`;
   }).join('');
-  return `<div class="commits-title">近 5 次提交</div><ul class="commit-list">${rows}</ul>`;
+  return uiTemplate`<div class="commits-title">近 5 次提交</div><ul class="commit-list">${rows}</ul>`;
 }
 
 // 空态引导（三分支）：
@@ -2173,7 +2975,7 @@ function renderFleetEmptyState(card) {
 
   if (!state.projectsLoaded) {
     // LOADING：refreshAll 还没跑完 list_projects，无法判断 (a)/(b)，先展示 loading
-    wrap.innerHTML = `
+    wrap.innerHTML = uiTemplate`
       <div class="empty-icon">${ICON_INBOX}</div>
       <div class="empty-title">加载中…</div>
       <div class="empty-hint">正在从本地 registry 读取跨机项目配置</div>
@@ -2184,11 +2986,11 @@ function renderFleetEmptyState(card) {
 
   const noSharedProjects = !state.projects.shared || state.projects.shared.length === 0;
   if (noSharedProjects) {
-    wrap.innerHTML = `
+    wrap.innerHTML = uiTemplate`
       <div class="empty-icon">${ICON_INBOX}</div>
       <div class="empty-title">还没有跨机同步的项目</div>
       <div class="empty-hint">
-        Fleet Board 展示的是勾选了「跨机同步（sync: true）」的项目状态。<br>
+        协作看板展示的是勾选了「跨机同步（sync: true）」的项目状态。<br>
         目前 registry 里一个都没有 —— 去项目管理页新增，或把已有的私有项目改为跨机同步。
       </div>
       <div class="empty-actions">
@@ -2198,13 +3000,13 @@ function renderFleetEmptyState(card) {
   } else {
     // 不给 [立即手动同步] 按钮（对账 #5）—— Fleet Board 页保持只读浏览，
     // 用户去顶栏点手动同步。SVG 箭头视觉引导到顶栏方向。
-    wrap.innerHTML = `
+    wrap.innerHTML = uiTemplate`
       <div class="empty-icon">${ICON_INBOX}</div>
       <div class="empty-title">已配置 ${state.projects.shared.length} 个跨机项目，但暂无 snapshot 数据</div>
       <div class="empty-hint">
         本机采集器还没跑过，或 dashboard-state 私有仓里还没收到 snapshot。<br>
         请点击右上角的<strong style="color:var(--brand-cyan);">「手动同步」</strong>按钮触发一次采集 + push + pull，
-        snapshot 就位后 Fleet Board 会自动显示各机状态。
+        snapshot 就位后协作看板会自动显示各机状态。
       </div>
     `;
   }
@@ -2229,31 +3031,31 @@ function removeFleetEmptyState(card) {
 // 旧版一句"信息不足（HEAD 缺失 / 需 fetch）"套所有成因会误导 —— 尤其"需 fetch"从来不是本 App 的解法。
 function insufficientLabel(reason) {
   switch (reason) {
-    case 'head-missing': return '某台机快照过旧（缺完整 HEAD），请在该机重新同步';
-    case 'head-mismatch': return 'HEAD 不同，请查看下方两机提交记录';
-    case 'multi-machine': return '暂不支持 3+ 台机判定';
-    case 'url-degraded': return 'git URL 无法归一化，跨机比对已降级';
+    case 'head-missing': return uiText('某台机快照过旧（缺完整 HEAD），请在该机重新同步');
+    case 'head-mismatch': return uiText('HEAD 不同，请查看下方两机提交记录');
+    case 'multi-machine': return uiText('暂不支持 3+ 台机判定');
+    case 'url-degraded': return uiText('git URL 无法归一化，跨机比对已降级');
     default:
       console.warn('[fleet] unknown insufficient reason:', reason);
-      return '信息不足';
+      return uiText('信息不足');
   }
 }
 
 function verdictLabel(v) {
   switch (v.kind) {
-    case 'synced': return '同步';
-    case 'one-in-progress': return `进行中（${v.machine_id}）`;
-    case 'ahead': return `${v.latest_machine_id} 领先 ${v.behind_machine_id}`;
-    case 'diverged': return '分叉：需手动合并';
-    case 'dual-dirty': return '两台都有未提交改动';
-    case 'uuid-conflict': return 'URL→UUID 冲突：请去项目管理页删除冗余 UUID';
-    case 'single-machine': return `仅 ${v.machine_id}`;
+    case 'synced': return uiText('同步');
+    case 'one-in-progress': return uiTemplate`进行中（${v.machine_id}）`;
+    case 'ahead': return uiTemplate`${v.latest_machine_id} 领先 ${v.behind_machine_id}`;
+    case 'diverged': return uiText('分叉：需手动合并');
+    case 'dual-dirty': return uiText('两台都有未提交改动');
+    case 'uuid-conflict': return uiText('URL→UUID 冲突：请去项目管理页删除冗余 UUID');
+    case 'single-machine': return uiTemplate`仅 ${v.machine_id}`;
     case 'insufficient': return insufficientLabel(v.reason);
     default:
       // 静默降级 = 前端 outdated 后用户只看到"信息不足"，无法区分是"真不足"还是"新枚举没识别"。
       // 显式打 warn + 让 badge 展示未知 kind，方便用户立刻抓到问题。
       console.warn('[fleet] unknown verdict kind:', v.kind, v);
-      return `未知判定（${v.kind || 'null'}）`;
+      return uiTemplate`未知判定（${v.kind || 'null'}）`;
   }
 }
 
@@ -2278,13 +3080,14 @@ function relTimeUtc(iso) {
   const t = new Date(iso).getTime();
   if (isNaN(t)) return '—';
   const ago = Math.max(0, Math.round((Date.now() - t) / 1000));
-  if (ago < 60) return `${ago} 秒前`;
-  if (ago < 3600) return `${Math.round(ago / 60)} 分钟前`;
-  if (ago < 86400) return `${Math.round(ago / 3600)} 小时前`;
-  return `${Math.round(ago / 86400)} 天前`;
+  if (ago < 60) return uiTemplate`${ago} 秒前`;
+  if (ago < 3600) return uiTemplate`${Math.round(ago / 60)} 分钟前`;
+  if (ago < 86400) return uiTemplate`${Math.round(ago / 3600)} 小时前`;
+  return uiTemplate`${Math.round(ago / 86400)} 天前`;
 }
 
 function showAggregateDetail(agg) {
+  state.fleetPresentation = agg;
   const drawer = document.getElementById('drawer');
   document.getElementById('drawer-title').textContent = agg.name;
   const extras = document.getElementById('drawer-extras');
@@ -2294,9 +3097,9 @@ function showAggregateDetail(agg) {
   // v4.2 §16.8：UUID 权威在 dashboard-state registry；无 UUID = 单机私有项目（sync:false）
   const uuidLine = agg.project_id
     ? `<code style="user-select:all;">${escapeHtml(agg.project_id)}</code>`
-    : '<span style="color:var(--text-mute);">(单机私有项目 sync:false)</span>';
-  const gitUrl = agg.git_url ? escapeHtml(agg.git_url) : '<span style="color:var(--text-mute);">(registry 未提供)</span>';
-  extras.innerHTML = `
+    : uiText('<span style="color:var(--text-mute);">(单机私有项目 sync:false)</span>');
+  const gitUrl = agg.git_url ? escapeHtml(agg.git_url) : uiText('<span style="color:var(--text-mute);">(registry 未提供)</span>');
+  extras.innerHTML = uiTemplate`
     <div class="form-row" style="margin-bottom:8px;">
       <label>项目 UUID</label>
       ${uuidLine}
@@ -2319,7 +3122,7 @@ function showAggregateDetail(agg) {
     // upstream 走 escapeHtml —— 数据来自后端 git remote，不能假设安全（对账 #1 XSS 防护）
     const upstreamLine = p.upstream
       ? escapeHtml(p.upstream)
-      : '<span class="mute">(无 upstream)</span>';
+      : uiText('<span class="mute">(无 upstream)</span>');
     const aheadBehind = (p.ahead != null || p.behind != null)
       ? `↑ ${Number(p.ahead) || 0} · ↓ ${Number(p.behind) || 0}`
       : '<span class="mute">—</span>';
@@ -2329,7 +3132,7 @@ function showAggregateDetail(agg) {
     // dangerous_state 是 kebab-case string enum（tracker.rs: Rebase / Merge / CherryPick / Detached），
     // 直接展示字符串即可；escapeHtml 兜底防未来变复杂结构时 XSS
     const dangerLine = p.dangerous_state
-      ? `<dt>危险态</dt><dd class="danger">${escapeHtml(typeof p.dangerous_state === 'string' ? p.dangerous_state : JSON.stringify(p.dangerous_state))}</dd>`
+      ? uiTemplate`<dt>危险态</dt><dd class="danger">${escapeHtml(typeof p.dangerous_state === 'string' ? p.dangerous_state : JSON.stringify(p.dangerous_state))}</dd>`
       : '';
     // progress 字段修正（对账 #2 硬 bug）：后端 tracker.rs::Progress { done, total, next }，
     // 不是 { summary }。原实现读 p.progress.summary 永远显示不出来
@@ -2341,21 +3144,21 @@ function showAggregateDetail(agg) {
       }
       if (p.progress.next) parts.push(`next: ${p.progress.next}`);
       if (parts.length) {
-        progressLine = `<dt>进度</dt><dd>${escapeHtml(parts.join(' · '))}</dd>`;
+        progressLine = uiTemplate`<dt>进度</dt><dd>${escapeHtml(parts.join(' · '))}</dd>`;
       }
     }
     const machineTs = view.machine_updated_at
-      ? `snapshot ${relTimeUtc(view.machine_updated_at)}${machineStale ? ' · 陈旧' : ''}`
+      ? `snapshot ${relTimeUtc(view.machine_updated_at)}${machineStale ? uiText(' · 陈旧') : ''}`
       : '';
 
-    return `
+    return uiTemplate`
       <div class="machine-block${staleClass}">
         <div class="machine-block-head">
           <div class="machine-block-title">${escapeHtml(mid)}</div>
           <div class="machine-block-meta">${escapeHtml(machineTs)}</div>
         </div>
         <dl class="machine-fields">
-          <dt>分支</dt><dd>${escapeHtml(p.branch || '(未 checkout)')}</dd>
+          <dt>分支</dt><dd>${escapeHtml(p.branch || uiText('(未 checkout)'))}</dd>
           <dt>HEAD</dt><dd>${p.head ? escapeHtml(p.head) : '<span class="mute">—</span>'}</dd>
           <dt>upstream</dt><dd>${upstreamLine}</dd>
           <dt>ahead / behind</dt><dd>${aheadBehind}</dd>
@@ -2372,11 +3175,26 @@ function showAggregateDetail(agg) {
 
   body.innerHTML = machineBlocks;
 
-  drawer.classList.add('open');
-  drawer.setAttribute('aria-hidden', 'false');
-  document.body.classList.add('drawer-open');
+  const inline = !!document.getElementById('fleet-inspector');
+  drawer.classList.toggle('open', !inline);
+  drawer.setAttribute('aria-hidden', String(inline));
+  document.body.classList.toggle('drawer-open', !inline);
+
+  renderFleetInspector(agg);
 }
 
+function renderFleetInspector(agg) {
+  const inspector = document.getElementById('fleet-inspector');
+  if (!inspector) return;
+  // 复用完整的快照展示，保留陈旧、进度和危险状态信息。
+  inspector.innerHTML = uiTemplate`
+    <div class="inspector-head">
+      <div class="inspector-title">${escapeHtml(agg.name)} · 跨机详情</div>
+      ${document.getElementById('drawer-extras').innerHTML}
+    </div>
+    <div class="inspector-body">${document.getElementById('drawer-body').innerHTML}</div>
+  `;
+}
 function verdictBannerClass(v) {
   return {
     'synced': 'info',
@@ -2458,11 +3276,11 @@ function renderProjects() {
     const { winPath, macPath } = splitMachinesByOs(p.machines);
     // v4.2 §16.8：删"待 commit project_id" pending badge —— UUID 权威已迁 dashboard-state registry
     const syncBadge = p._kind === 'private'
-      ? '<span class="badge mute">仅本机可见</span>'
-      : '<span class="badge info">跨机同步</span>';
+      ? uiText('<span class="badge mute">仅本机可见</span>')
+      : uiText('<span class="badge info">跨机同步</span>');
     const opsDisabled = p._kind === 'private';
     const tr = document.createElement('tr');
-    tr.innerHTML = `
+    tr.innerHTML = uiTemplate`
       <td><strong>${escapeHtml(p.name)}</strong></td>
       <td style="font-family:monospace;font-size:12px">${escapeHtml(p.git_url || '')}</td>
       <td style="color:var(--text-mute)">${escapeHtml(winPath)}</td>
@@ -2477,8 +3295,8 @@ function renderProjects() {
   }
   if (all.length === 0) {
     const message = q && shared.length + priv.length > 0
-      ? '无匹配项目，请调整或清空搜索条件'
-      : '暂无项目，点击“新增项目”添加';
+      ? uiText('无匹配项目，请调整或清空搜索条件')
+      : uiText('暂无项目，点击“新增项目”添加');
     tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--text-mute);">${message}</td></tr>`;
   }
 }
@@ -2493,12 +3311,12 @@ function openProjectModal(projectId) {
   projectModalPreviousFocus = document.activeElement;
   state.editingProjectId = projectId;
   editingExtras = [];
-  document.getElementById('modal-title').textContent = projectId ? '编辑项目' : '新增项目';
+  document.getElementById('modal-title').textContent = projectId ? uiText('编辑项目') : uiText('新增项目');
   // Q1-D：打开 modal 重置 Bitbucket web 提示
   const bbHint = document.getElementById('git-bb-hint');
   if (bbHint) bbHint.style.display = 'none';
   document.getElementById('f-sync').disabled = !!projectId;
-  document.getElementById('f-sync').title = projectId ? 'sync 状态不可编辑，请删除项目重新新增' : '';
+  document.getElementById('f-sync').title = projectId ? uiText('sync 状态不可编辑，请删除项目重新新增') : '';
   // 清空 extras 提示条
   const banner = document.getElementById('modal-extras-banner');
   if (banner) banner.remove();
@@ -2528,7 +3346,7 @@ function openProjectModal(projectId) {
         b.className = 'banner info';
         b.style.marginBottom = '12px';
         const ids = editingExtras.map(e => escapeHtml(e.id)).join(', ');
-        b.innerHTML = `ℹ️ 本项目还有 <strong>${editingExtras.length}</strong> 台额外机器: <code>${ids}</code> —— 保存时会保留原样`;
+        b.innerHTML = uiTemplate`ℹ️ 本项目还有 <strong>${editingExtras.length}</strong> 台额外机器: <code>${ids}</code> —— 保存时会保留原样`;
         const form = document.getElementById('project-form');
         form.parentNode.insertBefore(b, form);
       }
@@ -2574,6 +3392,12 @@ async function refreshMachinePickers() {
     console.error('list_known_machines', e);
     return; // 列不出来不影响手填，静默降级
   }
+  state.knownMachines = machines;
+  renderMachinePickers();
+}
+
+function renderMachinePickers() {
+  const machines = state.knownMachines;
   for (const [pickerId, inputId] of [
     ['f-win-machine-picker', 'f-win-machine-id'],
     ['f-mac-machine-picker', 'f-mac-machine-id'],
@@ -2584,15 +3408,15 @@ async function refreshMachinePickers() {
     picker.replaceChildren();
     const placeholder = document.createElement('option');
     placeholder.value = '';
-    placeholder.textContent = '— 从已知机器选择 —';
+    placeholder.textContent = uiText('— 从已知机器选择 —');
     picker.appendChild(placeholder);
     for (const machine of machines) {
       const option = document.createElement('option');
       option.value = machine.machine_id;
       // 主机名可能为空（老 snapshot 没这字段），那就只显示 id，不编造。
       const parts = [machine.hostname || machine.machine_id];
-      if (machine.is_local) parts.push('本机');
-      if (machine.is_legacy) parts.push('旧式身份·未迁移');
+      if (machine.is_local) parts.push(uiText('本机'));
+      if (machine.is_legacy) parts.push(uiText('旧式身份·未迁移'));
       option.textContent = `${parts.join(' · ')}（${machine.machine_id}）`;
       picker.appendChild(option);
     }
@@ -2613,8 +3437,8 @@ function renderIdentityFields() {
   const el = document.getElementById('identity-fields');
   if (!el) return;
   const rows = [
-    ['machine_id', state.machineId || '（取不到）', state.machineId ? '' : 'danger'],
-    ['当次主机名', state.hostname || '（取不到）', state.hostname ? 'mute' : 'warn'],
+    ['machine_id', state.machineId || uiText('（取不到）'), state.machineId ? '' : 'danger'],
+    [uiText('当次主机名'), state.hostname || uiText('（取不到）'), state.hostname ? 'mute' : 'warn'],
   ];
   el.replaceChildren();
   for (const [label, value, cls] of rows) {
@@ -2633,7 +3457,7 @@ function renderIdentityMigrationPlan(plan) {
   const box = document.getElementById('identity-migration-plan');
   if (!box) return;
   if (plan.is_noop || (!plan.registry_edits.length && !plan.snapshot_merge)) {
-    box.innerHTML = '<div class="banner info">本机身份已是最新，没有旧身份需要认领。</div>';
+    box.innerHTML = uiText('<div class="banner info">本机身份已是最新，没有旧身份需要认领。</div>');
     return;
   }
   const section = (title, body) => body
@@ -2641,37 +3465,37 @@ function renderIdentityMigrationPlan(plan) {
     : '';
   const claims = plan.claims.map(c =>
     `<li><code>${escapeHtml(c.machine_id)}</code> —— ${escapeHtml(claimReasonText(c.reason))}${
-      c.has_snapshot_dir ? '' : '（无历史数据，仅改键名）'}</li>`).join('');
+      c.has_snapshot_dir ? '' : uiText('（无历史数据，仅改键名）')}</li>`).join('');
   const edits = plan.registry_edits.map(e =>
-    `<li>项目「${escapeHtml(e.project_name)}」：<code>${escapeHtml(e.from_key)}</code> → <code>${escapeHtml(e.to_key)}</code>
+    uiTemplate`<li>项目「${escapeHtml(e.project_name)}」：<code>${escapeHtml(e.from_key)}</code> → <code>${escapeHtml(e.to_key)}</code>
      <br><span class="hint">路径不变：${escapeHtml(e.path)}</span></li>`).join('');
   const skipped = plan.skipped.map(s =>
     `<li><code>${escapeHtml(s.machine_id)}</code> —— ${escapeHtml(s.reason)}</li>`).join('');
   const merge = plan.snapshot_merge;
   const mergeHtml = merge
-    ? `<ul><li>合并到 <code>${escapeHtml(merge.target)}</code>：共 ${merge.project_count} 个项目、${merge.event_lines} 行事件</li>`
+    ? uiTemplate`<ul><li>合并到 <code>${escapeHtml(merge.target)}</code>：共 ${merge.project_count} 个项目、${merge.event_lines} 行事件</li>`
       + merge.source_project_counts.map(([name, count]) =>
-        `<li><code>${escapeHtml(name)}</code> 贡献 ${count} 个项目${count === 0 ? '（空壳）' : ''}</li>`).join('')
+        uiTemplate`<li><code>${escapeHtml(name)}</code> 贡献 ${count} 个项目${count === 0 ? uiText('（空壳）') : ''}</li>`).join('')
       + '</ul>'
     : '';
   const conflicts = plan.conflicts.length
     ? `<div class="banner warn">${plan.conflicts.map(escapeHtml).join('<br>')}</div>`
     : '';
   box.innerHTML = conflicts
-    + section('将认领这些旧身份', claims ? `<ul>${claims}</ul>` : '')
-    + section('注册表键改写（路径值一律不动）', edits ? `<ul>${edits}</ul>` : '')
-    + section('快照合并', mergeHtml)
-    + section('不动（原样保留）', skipped ? `<ul>${skipped}</ul>` : '')
-    + '<div class="banner info">执行前会自动整仓备份；旧目录一个都不删，随时可回滚。</div>';
+    + section(uiText('将认领这些旧身份'), claims ? `<ul>${claims}</ul>` : '')
+    + section(uiText('注册表键改写（路径值一律不动）'), edits ? `<ul>${edits}</ul>` : '')
+    + section(uiText('快照合并'), mergeHtml)
+    + section(uiText('不动（原样保留）'), skipped ? `<ul>${skipped}</ul>` : '')
+    + uiText('<div class="banner info">执行前会自动整仓备份；旧目录一个都不删，随时可回滚。</div>');
   document.getElementById('btn-apply-identity-migration').style.display = '';
 }
 
 function claimReasonText(reason) {
   switch (reason && reason.kind) {
-    case 'frozen_in_local_config': return '本机 local.yaml 记录的旧身份（该文件只有本机写）';
-    case 'current_hostname': return '与当次真实主机名一致';
-    case 'hostname_history': return '在本机主机名漂移轨迹中出现过';
-    default: return '未知理由';
+    case 'frozen_in_local_config': return uiText('本机 local.yaml 记录的旧身份（该文件只有本机写）');
+    case 'current_hostname': return uiText('与当次真实主机名一致');
+    case 'hostname_history': return uiText('在本机主机名漂移轨迹中出现过');
+    default: return uiText('未知理由');
   }
 }
 
@@ -2685,16 +3509,16 @@ function bindIdentityMigration() {
       const plan = await invoke('plan_identity_migration', {});
       renderIdentityMigrationPlan(plan);
     } catch (e) {
-      flash('检查旧身份失败：' + e, true);
+      flash(uiText('检查旧身份失败：') + e, true);
     }
   });
   applyBtn.addEventListener('click', async () => {
     // 必须走 uiConfirm：原生 confirm() 在 Wry macOS 哑弹（详见本文件 uiConfirm 上方注释）
     const ok = await uiConfirm(
-      '执行身份迁移？\n\n' +
-      '- 执行前会自动整仓备份（备份路径执行完会显示）\n' +
-      '- 旧身份目录一个都不删，随时可回滚',
-      { title: '执行身份迁移', okText: '执行迁移' }
+      uiText('执行身份迁移？\n\n') +
+      uiText('- 执行前会自动整仓备份（备份路径执行完会显示）\n') +
+      uiText('- 旧身份目录一个都不删，随时可回滚'),
+      { title: uiText('执行身份迁移'), okText: uiText('执行迁移') }
     );
     if (!ok) return;
     applyBtn.disabled = true;
@@ -2705,12 +3529,12 @@ function bindIdentityMigration() {
       // 这种情况必须让用户当场看见，不能只当成功收场。
       const dirtyWarn = report.committed
         ? ''
-        : `<div class="banner warn">迁移改动未生成提交（${escapeHtml(report.commit_note || '原因未知')}）。`
-          + `共享仓工作树当前是脏的，同步会失败，请先手工处理。</div>`;
-      box.innerHTML = `<div class="banner info">迁移完成：改写 ${report.registry_files_written} 条注册表键`
-        + `${report.snapshot_written ? '、已合并快照' : ''}。<br>备份位置：<code>${escapeHtml(report.backup_path)}</code>`
-        + `<br>保留未删的旧目录：<code>${report.legacy_dirs_kept.map(escapeHtml).join('、') || '无'}</code>`
-        + `${report.committed ? '<br>改动已提交到共享仓本地（未推送，下次同步一并推）。' : ''}</div>`
+        : uiTemplate`<div class="banner warn">迁移改动未生成提交（${escapeHtml(report.commit_note || uiText('原因未知'))}）。`
+          + uiTemplate`共享仓工作树当前是脏的，同步会失败，请先手工处理。</div>`;
+      box.innerHTML = uiTemplate`<div class="banner info">迁移完成：改写 ${report.registry_files_written} 条注册表键`
+        + uiTemplate`${report.snapshot_written ? uiText('、已合并快照') : ''}。<br>备份位置：<code>${escapeHtml(report.backup_path)}</code>`
+        + uiTemplate`<br>保留未删的旧目录：<code>${report.legacy_dirs_kept.map(escapeHtml).join('、') || uiText('无')}</code>`
+        + `${report.committed ? uiText('<br>改动已提交到共享仓本地（未推送，下次同步一并推）。') : ''}</div>`
         + dirtyWarn;
       applyBtn.style.display = 'none';
       // 身份已变，重取上下文让全局 state 跟上，否则后续渲染还按旧身份匹配。
@@ -2721,7 +3545,7 @@ function bindIdentityMigration() {
       await refreshAll();
       renderIdentityFields();
     } catch (e) {
-      flash('迁移失败：' + e, true);
+      flash(uiText('迁移失败：') + e, true);
     } finally {
       applyBtn.disabled = false;
     }
@@ -2765,10 +3589,10 @@ function bindProjectForm() {
     const macId = document.getElementById('f-mac-machine-id').value.trim();
     const macPath = document.getElementById('f-mac-path').value.trim();
     const sync = document.getElementById('f-sync').checked;
-    if (!name || !git) { flash('项目名 / git 地址必填', true); return; }
-    if (winPath && !winId) { flash('填了 Win 路径就必须填 Win 机 machine_id（对方机 hostname）', true); return; }
-    if (macPath && !macId) { flash('填了 Mac 路径就必须填 Mac 机 machine_id（对方机 hostname）', true); return; }
-    if (winId && macId && winId === macId) { flash('Win 机和 Mac 机 machine_id 不能相同', true); return; }
+    if (!name || !git) { flash(uiText('项目名 / git 地址必填'), true); return; }
+    if (winPath && !winId) { flash(uiText('填了 Win 路径就必须填 Win 机 machine_id（对方机 hostname）'), true); return; }
+    if (macPath && !macId) { flash(uiText('填了 Mac 路径就必须填 Mac 机 machine_id（对方机 hostname）'), true); return; }
+    if (winId && macId && winId === macId) { flash(uiText('Win 机和 Mac 机 machine_id 不能相同'), true); return; }
     const machines = {};
     for (const ex of editingExtras) {
       if (ex.id && ex.path) machines[ex.id] = ex.path;
@@ -2784,7 +3608,7 @@ function bindProjectForm() {
     };
     projectSaving = true;
     document.getElementById('btn-cancel-project').disabled = true;
-    setBtnBusy(true, '保存中…');
+    setBtnBusy(true, uiText('保存中…'));
     try {
       if (state.editingProjectId) {
         // 编辑分支不变（v4.2 edit_project 未改）
@@ -2793,7 +3617,7 @@ function bindProjectForm() {
         });
         closeProjectModal(true);
         await refreshAll();
-        flash('已保存');
+        flash(uiText('已保存'));
         return;
       }
 
@@ -2806,39 +3630,39 @@ function bindProjectForm() {
         });
         closeProjectModal(true);
         await refreshAll();
-        flash('已新增（仅本机可见）');
+        flash(uiText('已新增（仅本机可见）'));
         return;
       }
 
       // ---- sync:true 流程 ----
-      setBtnBusy(true, '拉最新 registry…');
+      setBtnBusy(true, uiText('拉最新 registry…'));
       try {
         await invoke('pull_registry_before_write');
       } catch (pullErr) {
-        setBtnBusy(false, '保存');
+        setBtnBusy(false, uiText('保存'));
         flash(
-          `pull dashboard-state 失败，无法安全新增（v4.2 pull-first 硬约束）：${pullErr}`,
+          uiTemplate`pull dashboard-state 失败，无法安全新增（v4.2 pull-first 硬约束）：${pullErr}`,
           true
         );
         return;
       }
 
-      setBtnBusy(true, '反查 registry…');
+      setBtnBusy(true, uiText('反查 registry…'));
       let lookup;
       try {
         lookup = await invoke('find_project_by_git_url', { gitUrl: git });
       } catch (lookupErr) {
-        setBtnBusy(false, '保存');
-        flash(`registry 反查失败：${lookupErr}`, true);
+        setBtnBusy(false, uiText('保存'));
+        flash(uiTemplate`registry 反查失败：${lookupErr}`, true);
         return;
       }
-      setBtnBusy(false, '保存');
+      setBtnBusy(false, uiText('保存'));
 
       if (lookup && lookup.kind === 'conflict') {
         // 多命中 —— URL→UUID 全局唯一 invariant 违反
         const uuids = (lookup.uuids || []).join(', ');
         flash(
-          `URL→UUID 冲突：${lookup.url} 命中多个 UUID [${uuids}]，请先去 Fleet Board 删除冗余 UUID 再新增`,
+          uiTemplate`URL→UUID 冲突：${lookup.url} 命中多个 UUID [${uuids}]，请先去协作看板删除冗余 UUID 再新增`,
           true
         );
         return; // 阻塞保存
@@ -2849,11 +3673,11 @@ function bindProjectForm() {
         const shortId = String(lookup.project_id || '').slice(0, 8);
         const existingMachines = (lookup.machines || []).join(', ');
         const ok = await uiConfirm(
-          `该项目已在 registry 注册（UUID ${shortId}…，项目名"${lookup.name}"，已注册机器：${existingMachines}）。\n\n` +
-          `是否把本机路径 "${localPath}" 关联到这个 UUID？\n\n` +
-          `- 确认：追加 machines[${state.machineId}] = ${localPath}\n` +
-          `- 取消：不做任何写入（若你其实要新建独立项目，请确认 git URL 是否填对）`,
-          { title: '关联到已有项目', okText: '关联' }
+          uiTemplate`该项目已在 registry 注册（UUID ${shortId}…，项目名"${lookup.name}"，已注册机器：${existingMachines}）。\n\n` +
+          uiTemplate`是否把本机路径 "${localPath}" 关联到这个 UUID？\n\n` +
+          uiTemplate`- 确认：追加 machines[${state.machineId}] = ${localPath}\n` +
+          uiTemplate`- 取消：不做任何写入（若你其实要新建独立项目，请确认 git URL 是否填对）`,
+          { title: uiText('关联到已有项目'), okText: uiText('关联') }
         );
         if (!ok) return;
       }
@@ -2871,18 +3695,18 @@ function bindProjectForm() {
         if (msg.includes('[NEED_DUAL_FORM_CONFIRM]')) {
           // Bitbucket 双形态：本地 origin 与手填是同一仓两种写法，弹确认后带 confirm_dual_form:true 重试
           const ok = await uiConfirm(
-            '检测到 Bitbucket 双形态地址：\n\n' +
-            '本地 origin 与你填写的 git 地址是同一仓的两种写法（web / clone 形式）。\n\n' +
-            '确认后将以本地真实 origin 作主地址、你填写的地址作别名登记（跨机配对靠此对齐）。\n\n是否确认？',
-            { title: 'Bitbucket 双形态确认', okText: '确认' }
+            uiText('检测到 Bitbucket 双形态地址：\n\n') +
+            uiText('本地 origin 与你填写的 git 地址是同一仓的两种写法（web / clone 形式）。\n\n') +
+            uiText('确认后将以本地真实 origin 作主地址、你填写的地址作别名登记（跨机配对靠此对齐）。\n\n是否确认？'),
+            { title: uiText('Bitbucket 双形态确认'), okText: uiText('确认') }
           );
-          if (!ok) { setBtnBusy(false, '保存'); return; }
-          setBtnBusy(true, '登记中…');
+          if (!ok) { setBtnBusy(false, uiText('保存')); return; }
+          setBtnBusy(true, uiText('登记中…'));
           await addReq(true);
-          setBtnBusy(false, '保存');
+          setBtnBusy(false, uiText('保存'));
         } else if (msg.includes('[ORIGIN_UNRELATED]')) {
           // origin 与手填无关（疑似选错项目目录）：展示陈述句（去机器 tag 前缀），不重试
-          setBtnBusy(false, '保存');
+          setBtnBusy(false, uiText('保存'));
           flash(msg.replace(/^.*\[ORIGIN_UNRELATED\]\s*/, ''), true);
           return;
         } else {
@@ -2891,14 +3715,14 @@ function bindProjectForm() {
       }
       closeProjectModal(true);
       await refreshAll();
-      flash(lookup && lookup.kind === 'existing' ? '已关联本机路径到已有项目' : '已新增');
+      flash(lookup && lookup.kind === 'existing' ? uiText('已关联本机路径到已有项目') : uiText('已新增'));
     } catch (e) {
-      setBtnBusy(false, '保存');
-      flash('保存失败：' + e, true);
+      setBtnBusy(false, uiText('保存'));
+      flash(uiText('保存失败：') + e, true);
     } finally {
       projectSaving = false;
       document.getElementById('btn-cancel-project').disabled = false;
-      setBtnBusy(false, '保存');
+      setBtnBusy(false, uiText('保存'));
       if (!document.getElementById('project-modal-backdrop').classList.contains('open') &&
           state.activeTab === 'projects' && document.activeElement === document.body) {
         const edit = [...document.querySelectorAll('#project-table [data-action="edit"]')]
@@ -2918,7 +3742,7 @@ async function editProject(id) {
 // 统一改走复用 .modal-backdrop 的 DOM 弹窗。Promise 化以顶替同步 confirm：resolve(true)=确认 / false=取消。
 // ESC / 遮罩空白 = 取消，Enter 激活当前按钮，Tab 在两个操作间循环；隐藏与项目删除确认默认聚焦取消。
 let cancelActiveConfirmation = null;
-function uiConfirm(message, { title = '请确认', okText = '确认', danger = false, cancelFirst = false } = {}) {
+function uiConfirm(message, { title = uiText('请确认'), okText = uiText('确认'), danger = false, cancelFirst = false } = {}) {
   // 异步项目操作也可能弹确认；新弹窗先取消旧请求，避免一次确认批准两个动作。
   if (cancelActiveConfirmation) cancelActiveConfirmation();
   return new Promise((resolve) => {
@@ -2972,13 +3796,13 @@ function uiConfirm(message, { title = '请确认', okText = '确认', danger = f
 
 async function deleteProject(id, name) {
   if (!id) return;
-  if (!(await uiConfirm(`删除项目 "${name}"？\n\n仅从注册表移除，项目源码/git 仓/hook 不动。\n若想改 sync 状态请删除后重新新增。`, { title: '删除项目', okText: '删除', danger: true, cancelFirst: true }))) return;
+  if (!(await uiConfirm(uiTemplate`删除项目 "${name}"？\n\n仅从注册表移除，项目源码/git 仓/hook 不动。\n若想改 sync 状态请删除后重新新增。`, { title: uiText('删除项目'), okText: uiText('删除'), danger: true, cancelFirst: true }))) return;
   try {
     await invoke('delete_project', { projectId: id });
     await refreshAll();
-    flash('已删除');
+    flash(uiText('已删除'));
   } catch (e) {
-    flash('删除失败：' + e, true);
+    flash(uiText('删除失败：') + e, true);
   }
 }
 
@@ -2987,9 +3811,11 @@ async function deleteProject(id, name) {
 // 用独立 id `settings-sync-status`，不能复用顶栏的 `sync-status`（重复 id 会被 getElementById
 // 只取第一个即顶栏，导致设置页状态行永不生效）。
 function setSyncStatus(msg, isError = false) {
+  state.settingsStatusRenderer = typeof msg === 'function' ? msg : () => msg;
+  state.settingsStatusError = isError;
   const el = document.getElementById('settings-sync-status');
   if (!el) return;
-  el.textContent = msg;
+  el.textContent = state.settingsStatusRenderer();
   el.style.color = isError ? 'var(--danger, #c0392b)' : 'var(--muted, #888)';
 }
 
@@ -3001,8 +3827,8 @@ async function loadSettings() {
     document.getElementById('in-state-root').value = cfg.dashboard_state_root || '';
     document.getElementById('in-repowiki-cli').value = cfg.repowiki_cli_path || '';
     document.getElementById('in-repowiki-data-root').value = cfg.repowiki_data_root || '';
-    setSyncStatus('');
-  } catch (e) { flash('读设置失败：' + e, true); }
+    setSyncStatus(() => (''));
+  } catch (e) { flash(uiText('读设置失败：') + e, true); }
 
   renderIdentityFields();
   bindIdentityMigration();
@@ -3023,33 +3849,33 @@ async function loadSettings() {
       // 命令 Ok 恒表示「保存成功」；同步子状态在 resp.sync（P1-4 部分成功语义）。
       const sync = (resp && resp.sync) || {};
       if (sync.state === 'synced') {
-        setSyncStatus('✅ 设置已保存，存储仓已同步');
-        flash('设置已保存，存储仓已同步');
+        setSyncStatus(() => (uiText('✅ 设置已保存，存储仓已同步')));
+        flash(uiText('设置已保存，存储仓已同步'));
       } else if (sync.state === 'unconfigured') {
-        setSyncStatus('设置已保存（未配置存储仓地址，未触发同步）');
-        flash('设置已保存');
+        setSyncStatus(() => (uiText('设置已保存（未配置存储仓地址，未触发同步）')));
+        flash(uiText('设置已保存'));
       } else if (sync.state === 'failed') {
         // 前端据 sync.tag 判分支，展示后端给的中文 hint；tag 只用于调试可见。
-        setSyncStatus(`⚠️ 设置已保存，但自动同步失败：${sync.hint || ''}（${sync.tag || ''}）`, true);
-        flash(`设置已保存，但自动同步失败：${sync.hint || sync.tag || '未知错误'}`, true);
+        setSyncStatus(() => (uiTemplate`⚠️ 设置已保存，但自动同步失败：${sync.hint || ''}（${sync.tag || ''}）`), true);
+        flash(uiTemplate`设置已保存，但自动同步失败：${sync.hint || sync.tag || uiText('未知错误')}`, true);
       } else {
-        setSyncStatus('设置已保存');
-        flash('设置已保存');
+        setSyncStatus(() => (uiText('设置已保存')));
+        flash(uiText('设置已保存'));
       }
     } catch (e) {
       // 走到这里 = 保存本身失败（校验 / 写盘 / 内嵌 token 拒绝等），设置未生效。
-      setSyncStatus('❌ 保存失败：' + e, true);
-      flash('保存失败：' + e, true);
+      setSyncStatus(() => (uiText('❌ 保存失败：') + e), true);
+      flash(uiText('保存失败：') + e, true);
     }
   };
   document.getElementById('btn-open-data-dir').onclick = async () => {
     try {
       await invoke('open_data_dir', {});
-    } catch (e) { flash('打开数据目录失败：' + e, true); }
+    } catch (e) { flash(uiText('打开数据目录失败：') + e, true); }
   };
   document.getElementById('btn-open-session-data-dir').onclick = async () => {
     try { await invoke('open_session_data_dir', {}); }
-    catch (e) { flash('打开本机会话目录失败：' + e, true); }
+    catch (e) { flash(uiText('打开本机会话目录失败：') + e, true); }
   };
   document.getElementById('btn-save-repowiki-settings').onclick = async () => {
     const repowikiCliPath = document.getElementById('in-repowiki-cli').value.trim();
@@ -3059,8 +3885,8 @@ async function loadSettings() {
         repowikiCliPath: repowikiCliPath || null,
         repowikiDataRoot: repowikiDataRoot || null,
       });
-      flash('RepoWiki 本机路径已保存；未触发 dashboard-state 同步');
-    } catch (e) { flash('RepoWiki 路径保存失败：' + e, true); }
+      flash(uiText('RepoWiki 本机路径已保存；未触发 dashboard-state 同步'));
+    } catch (e) { flash(uiText('RepoWiki 路径保存失败：') + e, true); }
   };
 }
 
@@ -3079,10 +3905,10 @@ function escapeHtml(s) {
 function relTime(mtime) {
   const now = Date.now() / 1000;
   const diff = now - mtime;
-  if (diff < 60) return '刚刚';
-  if (diff < 3600) return `${Math.floor(diff/60)}m前`;
-  if (diff < 86400) return `${Math.floor(diff/3600)}h前`;
-  return `${Math.floor(diff/86400)}d前`;
+  if (diff < 60) return uiText('刚刚');
+  if (diff < 3600) return uiTemplate`${Math.floor(diff/60)}m前`;
+  if (diff < 86400) return uiTemplate`${Math.floor(diff/3600)}h前`;
+  return uiTemplate`${Math.floor(diff/86400)}d前`;
 }
 
 function absTime(mtime) {
@@ -3091,20 +3917,31 @@ function absTime(mtime) {
   return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
-// 对话消息 markdown 渲染。后端 preview 每条格式为 "🧑 text" 或 "🤖 text"。
-// marked v15 挂 window.marked（对象，v15 起废弃 marked() 直调，只能 marked.parse()）；
-// 若加载失败 fallback 到 escapeHtml + <br>（保底不炸）。
+// 对话消息 Markdown 渲染。后端 preview 每条格式为 "🧑 text" 或 "🤖 text"。
+// 正文是不可信输入：独立 Marked 实例限制 HTML、链接及图片，不修改共享解析器。
 function renderDialogMarkdown(previewLines) {
-  // marked v15 默认 pass-through raw HTML（如 <observation> <thinking> 等 cc 会话里常见 XML-ish 标签），
-  // 塞进 DOM 后浏览器不知道咋渲染非标准标签，会崩布局。pre-escape `<>` 让 marked 完全不当 HTML 处理，
-  // 只留 markdown 语法（```/**bold**/list 都不用尖括号），语义无损，且天然免疫 XSS。
-  const preEscape = (text) => text.replace(/[<>]/g, c => c === '<' ? '&lt;' : '&gt;');
-  const safeParse = (text) => {
-    const escaped = preEscape(text);
-    if (window.marked && typeof window.marked.parse === 'function') {
-      try { return window.marked.parse(escaped); }
-      catch (e) { return escapeHtml(text).replace(/\n/g, '<br>'); }
+  let markdown;
+  try {
+    if (typeof window.marked?.Marked === 'function') {
+      markdown = new window.marked.Marked({
+        renderer: {
+          html({ text }) { return escapeHtml(text); },
+          // 不加载正文中的远程或本地资源；链接内的图片也只保留替代文字。
+          image({ text }) { return escapeHtml(text); },
+          link({ href, tokens }) {
+            const label = this.parser.parseInline(tokens);
+            // 不解码再放行，实体编码/控制字符/相对地址一律降为文字。
+            // 输出属性再次转义，阻止引号或 HTML 实体变成额外属性。
+            if (!/^(?:https?:\/\/|mailto:)[^\s\u0000-\u001f\u007f]+$/i.test(href)) return label;
+            return `<a href="${escapeHtml(href)}" rel="noopener noreferrer">${label}</a>`;
+          },
+        },
+      });
     }
+  } catch (_) { /* 解析器不可用时按下方纯文本路径展示。 */ }
+  const safeParse = (text) => {
+    try { if (markdown) return markdown.parse(text); }
+    catch (_) { /* 单条消息解析失败，不影响其余消息。 */ }
     return escapeHtml(text).replace(/\n/g, '<br>');
   };
   return previewLines.map(line => {
@@ -3177,12 +4014,18 @@ const MOCK_SESSIONS_BY_SOURCE = {
   ],
 };
 
+for (const source of ['opencode', 'antigravity', 'dsh', 'zcode', 'gemini-cli']) {
+  MOCK_SESSIONS_BY_SOURCE[source] = [{session_id:`${source}-sample`, mtime:Date.now()/1000-600, cwd:'/tmp/demo', title:`${sessionSourceLabel(source)} 示例会话`, projects:'demo', haystack:'示例', source}];
+}
+
 // resume 命令模板：跟后端 copy_resume_command_for_source 的分支一一对应
 const MOCK_RESUME_PREFIX = {
   'claude-cli': 'claude --resume ',
   codex: 'codex resume ',
   pi: 'pi --session ',
   grok: 'grok --resume ',
+  opencode: 'opencode --session ',
+  antigravity: 'agy --conversation ',
 };
 
 const MOCK_HIDDEN = Object.fromEntries(SESSION_SOURCE_IDS.map(source => [source, new Set()]));
@@ -3210,7 +4053,7 @@ function mockInvoke(cmd, args) {
       return Promise.resolve({source:args.source, session_id:args.sessionId, hidden:args.hidden});
     }
     case 'toggle_favorite': {
-      const items = Object.values(MOCK_SESSIONS_BY_SOURCE).flat().filter(s => s.session_id === args.sessionId);
+      const items = (MOCK_SESSIONS_BY_SOURCE[args.source] || []).filter(s => s.session_id === args.sessionId);
       const next = !items[0]?.favorited;
       items.forEach(s => { s.favorited = next; });
       return Promise.resolve(next);
@@ -3347,17 +4190,18 @@ function mockInvoke(cmd, args) {
     case 'get_sync_status':
       return Promise.resolve({ last_success_at: null, last_attempt: null });
     case 'session_detail':
+      if (args?.source === 'antigravity') return Promise.resolve({preview:[],files:[],summary:'这是工具保存的示例会话摘要。',notice:'暂不支持完整对话。'});
       return Promise.resolve({
         preview: ['🧑 mock question', '🤖 mock answer'],
         // grok 的生产逻辑「改过的文件」恒为空（chat_history 里没有工具入参），
         // mock 必须跟着空，否则浏览器直开会看到一个真实环境永远不会出现的文件
-        files: args?.source === 'grok' ? [] : ['F:\\mock\\file.rs'],
+        files: ['grok', 'opencode', 'dsh', 'zcode', 'gemini-cli'].includes(args?.source) ? [] : ['F:\\mock\\file.rs'],
       });
     case 'copy_resume_command':
-      return Promise.resolve(
-        (MOCK_RESUME_PREFIX[args?.source] || MOCK_RESUME_PREFIX['claude-cli'])
-        + (args?.sessionId || 'mock'),
-      );
+      if (!SESSION_SOURCE_IDS.includes(args?.source)) return Promise.reject(new Error('UNSUPPORTED_SESSION_SOURCE'));
+      if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(args?.sessionId || '')) return Promise.reject(new Error('INVALID_SESSION_ID'));
+      if (!MOCK_RESUME_PREFIX[args.source]) return Promise.reject(new Error('RESUME_UNSUPPORTED'));
+      return Promise.resolve(MOCK_RESUME_PREFIX[args.source] + args.sessionId);
     case 'get_local_context':
       // 形状对齐后端 MachineContext：machine_id 可为 null（取不到时前端必须报错而非兜底）。
       return Promise.resolve({
@@ -3391,6 +4235,12 @@ function mockInvoke(cmd, args) {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     SESSION_SOURCE_IDS,
+    normalizeSessionSourcePreferences,
+    visibleSessionSources,
+    readSessionSourcePreferences,
+    persistSessionSourcePreferences,
+    moveSessionSource,
+    reorderSessionSource,
     sessionSourceLabel,
     createSessionViews,
     mockInvoke,
@@ -3405,5 +4255,7 @@ if (typeof module !== 'undefined' && module.exports) {
     repoWikiPageIdFromLink,
     repoWikiV2Freshness,
     wikiStateLabel,
+    filterRepoWikiNavigation,
+    findRepoWikiTextRanges,
   };
 }

@@ -21,14 +21,14 @@ def main():
     flags.extend([
         f"--remap-path-prefix={Path.home()}=builder-home",
         f"--remap-path-prefix={ROOT}=.",
-        f"--remap-path-prefix={Path.home() / '.cargo'}=cargo-home",
+        f"--remap-path-prefix={Path(os.environ.get('CARGO_HOME', Path.home() / '.cargo'))}=cargo-home",
     ])
     env["CARGO_ENCODED_RUSTFLAGS"] = "\x1f".join(flags)
     subprocess.run([
         "cargo", "tauri", "icon", "dashboard-tauri/icons/app-icon.svg",
         "--output", "dashboard-tauri/icons",
     ], cwd=ROOT, env=env, check=True)
-    subprocess.run(["python3", "scripts/make_notices.py"], cwd=ROOT, env=env, check=True)
+    subprocess.run(["python3", "scripts/make_notices.py", "--target", "aarch64-apple-darwin"], cwd=ROOT, env=env, check=True)
     command = [
         "cargo", "tauri", "build", "--bundles", "app,dmg",
         "--config", '{"bundle":{"resources":["resources/THIRD-PARTY-NOTICES.txt"]}}',

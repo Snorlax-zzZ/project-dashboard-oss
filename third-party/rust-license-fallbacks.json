@@ -80,5 +80,14 @@
   ],
   "vsimd@0.8.0": [
     "71674605ec4c087f.txt"
+  ],
+  "webview2-com@0.38.2": [
+    "webview2-rs-LICENSE.txt"
+  ],
+  "webview2-com-macros@0.8.1": [
+    "webview2-rs-LICENSE.txt"
+  ],
+  "webview2-com-sys@0.38.2": [
+    "webview2-rs-LICENSE.txt"
   ]
 }

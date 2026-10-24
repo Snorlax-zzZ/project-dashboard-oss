@@ -40,7 +40,7 @@ fn write_session(
         "created_at": "2026-09-07T03:22:42.864490Z",
         "updated_at": updated_at,
         "num_chat_messages": history.len(),
-        "current_model_id": "grok-4.6",
+        "current_model_id": "fixture-model",
     });
     fs::write(dir.join("summary.json"), summary.to_string()).unwrap();
     let mut body = history.join("\n");
@@ -64,7 +64,7 @@ fn assistant_line(text: &str) -> String {
     serde_json::json!({
         "type": "assistant",
         "content": text,
-        "model_id": "grok-4.6",
+        "model_id": "fixture-model",
         "model_fingerprint": "fp_test",
     })
     .to_string()
@@ -82,7 +82,7 @@ fn grok_scan_reads_summary_metadata_and_strips_injected_context() {
         "会话记录加 Grok 来源页签",
         "2026-09-08T03:23:48.982261Z",
         &[
-            serde_json::json!({"type": "system", "content": "You are Grok 4.5 released by xAI."})
+            serde_json::json!({"type": "system", "content": "You are Grok test assistant."})
                 .to_string(),
             user_line(
                 "<user_info>\nOS Version: macos\n</user_info>\n\n<rules>注入的用户规则正文</rules>",
@@ -585,7 +585,7 @@ fn grok_resume_command_uses_resume_flag() {
 #[test]
 fn unknown_session_source_stays_fail_closed() {
     // 新增两个来源后，未登记的来源仍必须被拒（不能因为 allowlist 放宽而漏过）
-    for source in ["grokbuild", "gemini", "opencode", ""] {
+    for source in ["grokbuild", "gemini", "unknown-tool", ""] {
         assert!(
             commands::copy_resume_command_for_source(source, SID).is_err(),
             "未登记来源 {source} 必须 fail-closed"

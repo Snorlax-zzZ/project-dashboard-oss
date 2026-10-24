@@ -80,10 +80,10 @@ fn copy_resume_command(source: String, session_id: String) -> Result<String, Str
 }
 
 #[tauri::command]
-async fn toggle_favorite(session_id: String) -> Result<bool, String> {
+async fn toggle_favorite(source: String, session_id: String) -> Result<bool, String> {
     tauri::async_runtime::spawn_blocking(move || {
         dashboard_core::session_storage::default_storage()
-            .toggle_favorite(&session_id)
+            .toggle_favorite_for_source(&source, &session_id)
             .map_err(err)
     })
     .await

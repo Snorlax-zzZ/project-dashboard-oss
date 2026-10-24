@@ -29,7 +29,10 @@ pub struct RegistryProject {
     pub git_url: String,
     #[serde(default)]
     pub git_url_aliases: Vec<String>,
-    #[serde(serialize_with = "serialize_true", deserialize_with = "deserialize_true")]
+    #[serde(
+        serialize_with = "serialize_true",
+        deserialize_with = "deserialize_true"
+    )]
     pub sync: bool,
     pub machines: BTreeMap<String, String>,
     pub created_at: DateTime<Utc>,
@@ -44,7 +47,10 @@ pub struct PrivateProject {
     pub project_id: Option<Uuid>,
     pub path: String,
     pub git_url: String,
-    #[serde(serialize_with = "serialize_false", deserialize_with = "deserialize_false")]
+    #[serde(
+        serialize_with = "serialize_false",
+        deserialize_with = "deserialize_false"
+    )]
     pub sync: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -234,13 +240,16 @@ impl Registry {
         if project.sync {
             return Err(ConfigError::SyncMustBeFalse);
         }
-        if local.private_projects.iter().any(|p| p.name == project.name) {
+        if local
+            .private_projects
+            .iter()
+            .any(|p| p.name == project.name)
+        {
             return Err(ConfigError::DuplicateName(project.name.clone()));
         }
         local.private_projects.push(project);
         Ok(())
     }
-
 
     /// 编辑共享项目 —— sync 字段**永远不允许改**（spec: sync 状态单向不可逆）。
     /// name / git_url / machines 可改。
@@ -378,6 +387,9 @@ pub(crate) fn write_local_config_atomic(
     }
     let mut file = options.open(&temporary)?;
     file.write_all(contents)?;
+    #[cfg(windows)]
+    file.sync_all()?;
+    #[cfg(not(windows))]
     file.flush()?;
     drop(file);
     replace_local_config(&temporary, local_path)?;
@@ -387,6 +399,34 @@ pub(crate) fn write_local_config_atomic(
 
 struct TemporaryLocalConfig {
     path: Option<PathBuf>,
+}
+
+#[cfg(all(test, windows))]
+mod atomic_replace_tests {
+    use super::*;
+    use std::os::windows::fs::OpenOptionsExt;
+
+    #[test]
+    fn failed_replace_preserves_original_and_cleans_temporary() {
+        let dir = std::env::temp_dir().join(format!("pd-atomic-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("registry.yaml");
+        std::fs::write(&path, b"old-complete").unwrap();
+        // 真实 Windows 拒删除共享句柄让最终原子替换失败；旧文件不能先被截断。
+        let held = OpenOptions::new()
+            .read(true)
+            .share_mode(1)
+            .open(&path)
+            .unwrap();
+        assert!(write_local_config_atomic(&path, b"new-complete").is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"old-complete");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        drop(held);
+        write_local_config_atomic(&path, b"new-complete").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"new-complete");
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(&dir).unwrap();
+    }
 }
 
 impl TemporaryLocalConfig {
@@ -417,6 +457,7 @@ fn replace_local_config(source: &Path, destination: &Path) -> std::io::Result<()
     use std::os::windows::ffi::OsStrExt;
 
     const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
+    const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
     #[link(name = "Kernel32")]
     unsafe extern "system" {
         fn MoveFileExW(
@@ -440,7 +481,7 @@ fn replace_local_config(source: &Path, destination: &Path) -> std::io::Result<()
         MoveFileExW(
             source_wide.as_ptr(),
             destination_wide.as_ptr(),
-            MOVEFILE_REPLACE_EXISTING,
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
         )
     };
     if replaced == 0 {
@@ -577,7 +618,10 @@ fn preflight_migrate_pending(raw_yaml: &str, local_path: &Path) {
     let Ok(val) = serde_yaml::from_str::<serde_yaml::Value>(raw_yaml) else {
         return;
     };
-    let Some(seq) = val.get("pending_sync_projects").and_then(|v| v.as_sequence()) else {
+    let Some(seq) = val
+        .get("pending_sync_projects")
+        .and_then(|v| v.as_sequence())
+    else {
         return;
     };
     if seq.is_empty() {
@@ -665,7 +709,10 @@ pub enum ConfigError {
     DuplicateName(String),
     NoLocalConfig,
     SyncMustBeFalse,
-    MachineAlreadyRegistered { project_id: Uuid, machine_id: String },
+    MachineAlreadyRegistered {
+        project_id: Uuid,
+        machine_id: String,
+    },
 }
 
 impl std::fmt::Display for ConfigError {

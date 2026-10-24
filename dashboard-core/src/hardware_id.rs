@@ -225,6 +225,7 @@ fn probe_hardware_identifier() -> Result<String, HardwareIdError> {
 
 /// 从 `ioreg` 输出里抽 `"<key>" = "<value>"` 形式的值。
 /// ioreg 对字符串属性输出带引号，对二进制属性输出 `<hex>`，后者不是我们要的形状故不匹配。
+#[cfg(any(target_os = "macos", test))]
 fn extract_quoted_value(text: &str, key: &str) -> Option<String> {
     let needle = format!("\"{key}\"");
     for line in text.lines() {
@@ -267,7 +268,10 @@ mod tests {
         assert_eq!(first.len(), HARDWARE_HASH_HEX_LEN);
         // 大小写与首尾空白归一化后必须同哈希：ioreg / reg.exe 输出大小写不保证一致。
         assert_eq!(first, second);
-        assert_eq!(hash_identifier("  8E1B2C3D-4F56-7890-ABCD-EF1234567890 "), first);
+        assert_eq!(
+            hash_identifier("  8E1B2C3D-4F56-7890-ABCD-EF1234567890 "),
+            first
+        );
         assert_ne!(first, hash_identifier("другой-uuid"));
         assert!(first.chars().all(|c| c.is_ascii_hexdigit()));
     }

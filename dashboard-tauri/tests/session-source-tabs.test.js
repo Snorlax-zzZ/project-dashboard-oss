@@ -133,7 +133,7 @@ function testSourceTabsMarkup() {
   );
   // 四个页签都要有完整的 tab 语义属性，键盘导航与读屏才不会漏项
   const tabs = [...html.matchAll(/data-session-source="([^"]+)"/g)].map(match => match[1]);
-  assert.deepEqual(tabs, ['claude-cli', 'codex', 'pi', 'grok'], '页签顺序固定为四来源');
+  assert.deepEqual(tabs, ['claude-cli', 'codex', 'pi', 'grok', 'opencode', 'antigravity', 'dsh', 'zcode', 'gemini-cli'], '页签顺序固定为九来源');
   for (const source of tabs) {
     const markup = html.match(new RegExp(`<button[^>]*data-session-source="${source}"[^>]*>`))[0];
     assert.match(markup, /role="tab"/, `${source} 页签缺 role=tab`);
@@ -150,13 +150,14 @@ function testSourceTabsMarkup() {
 function testSourceIdsAndLabels() {
   assert.deepEqual(
     [...ui.SESSION_SOURCE_IDS],
-    ['claude-cli', 'codex', 'pi', 'grok'],
+    ['claude-cli', 'codex', 'pi', 'grok', 'opencode', 'antigravity', 'dsh', 'zcode', 'gemini-cli'],
     '来源 id 列表必须跟后端 allowlist 一致',
   );
   assert.equal(ui.sessionSourceLabel('claude-cli'), 'Claude Code');
   assert.equal(ui.sessionSourceLabel('codex'), 'Codex');
   assert.equal(ui.sessionSourceLabel('pi'), 'pi');
   assert.equal(ui.sessionSourceLabel('grok'), 'Grok');
+  for (const [id,label] of Object.entries({opencode:'OpenCode', antigravity:'Antigravity CLI', dsh:'DSH', zcode:'ZCode', 'gemini-cli':'Gemini CLI'})) assert.equal(ui.sessionSourceLabel(id),label);
   assert.equal(
     ui.sessionSourceLabel('unknown-source'),
     'unknown-source',
@@ -166,9 +167,9 @@ function testSourceIdsAndLabels() {
 
 function testIndependentViewStateFactory() {
   const views = ui.createSessionViews();
-  assert.deepEqual(Object.keys(views), ['claude-cli', 'codex', 'pi', 'grok']);
+  assert.deepEqual(Object.keys(views), ['claude-cli', 'codex', 'pi', 'grok', 'opencode', 'antigravity', 'dsh', 'zcode', 'gemini-cli']);
   const objects = new Set(Object.values(views));
-  assert.equal(objects.size, 4, '四个来源不能共享状态对象');
+  assert.equal(objects.size, 9, '九个来源不能共享状态对象');
   views['claude-cli'].query = 'alpha';
   views['claude-cli'].page = 3;
   for (const source of ['codex', 'pi', 'grok']) {
@@ -185,6 +186,8 @@ async function testMockListAndResumeAreSourceAware() {
     codex: 'codex resume ',
     pi: 'pi --session ',
     grok: 'grok --resume ',
+    opencode: 'opencode --session ',
+    antigravity: 'agy --conversation ',
   };
   const seen = [];
   for (const source of ui.SESSION_SOURCE_IDS) {
@@ -195,13 +198,18 @@ async function testMockListAndResumeAreSourceAware() {
       `${source} mock 数据的 source 字段必须自洽`,
     );
     seen.push(JSON.stringify(page.items));
-    assert.equal(
-      await ui.mockInvoke('copy_resume_command', { source, sessionId: `${source}-sid` }),
-      `${expectedResume[source]}${source}-sid`,
-    );
+    if (expectedResume[source]) {
+      assert.equal(await ui.mockInvoke('copy_resume_command', { source, sessionId: `${source}-sid` }), `${expectedResume[source]}${source}-sid`);
+    } else {
+      await assert.rejects(ui.mockInvoke('copy_resume_command', { source, sessionId: `${source}-sid` }), /RESUME_UNSUPPORTED/);
+    }
   }
   assert.equal(new Set(seen).size, ui.SESSION_SOURCE_IDS.length, '各来源 mock 数据必须互不相同');
 
+  const summary = await ui.mockInvoke('session_detail', {source:'antigravity', sessionId:'sample'});
+  assert.deepEqual(summary.preview, []);
+  assert.ok(summary.summary);
+  await assert.rejects(ui.mockInvoke('copy_resume_command', {source:'unknown', sessionId:'sample'}));
   // mock 的详情必须跟生产语义一致：grok 的「改过的文件」在生产逻辑里恒为空
   const grokDetail = await ui.mockInvoke('session_detail', { source: 'grok', sessionId: 'x' });
   assert.deepEqual(grokDetail.files, [], 'grok mock 不得伪造改动文件');
@@ -312,7 +320,41 @@ async function testStaleDetailResponseCannotOverwriteCurrentDrawer() {
   );
 }
 
+async function testEmptyDetailExplainsBoundedPreviewWithoutHidingFiles() {
+  let detail = { preview: [], files: ['still-visible.rs'] };
+  const harness = createRuntimeHarness(async cmd => {
+    assert.equal(cmd, 'session_detail');
+    if (detail instanceof Error) throw detail;
+    return detail;
+  });
+  const show = () => harness.run("showSessionDetail({source:'codex', session_id:'empty-session', title:'test'})");
+  await show();
+  assert.match(harness.element('drawer-body').innerHTML, /最近 512KB 中未找到可显示的对话/);
+  assert.match(harness.element('drawer-body').innerHTML, /复制 resume 命令/);
+  assert.match(harness.element('drawer-body').innerHTML, /still-visible\.rs/);
+
+  detail = { preview: ['🧑 正常对话 <tag>'], files: [] };
+  await show();
+  assert.match(harness.element('drawer-body').innerHTML, /正常对话 &lt;tag&gt;/);
+  assert.doesNotMatch(harness.element('drawer-body').innerHTML, /未找到可显示的对话/);
+  detail = new Error('read failed');
+  await show();
+  assert.match(harness.element('drawer-body').innerHTML, /加载详情失败: Error: read failed/);
+}
+
+async function testPartialCapabilitiesAreVisible() {
+  const harness = createRuntimeHarness(async () => ({preview:[], files:[], summary:'仅摘要 <script>', notice:'暂不支持完整对话'}));
+  await harness.run(`showSessionDetail({source:'antigravity',session_id:'test-id',title:'合成摘要',mtime:1})`);
+  assert.match(harness.element('session-inspector').innerHTML, /仅摘要 &lt;script&gt;/);
+  assert.match(harness.element('session-inspector').innerHTML, /暂不支持完整对话/);
+  assert.doesNotMatch(harness.element('session-inspector').innerHTML, /最近对话/);
+  await harness.run(`showSessionDetail({source:'zcode',session_id:'test-id',title:'合成会话',mtime:1})`);
+  assert.match(harness.element('session-inspector').innerHTML, /复制会话 ID/);
+  assert.doesNotMatch(harness.element('session-inspector').innerHTML, /claude --resume|复制恢复命令/);
+}
+
 async function main() {
+  await testPartialCapabilitiesAreVisible();
   testSourceTabsMarkup();
   testSourceIdsAndLabels();
   testIndependentViewStateFactory();
@@ -320,6 +362,7 @@ async function main() {
   testProductionIpcCarriesSource();
   await testStaleListResponseCannotOverwriteLatestResult();
   await testStaleDetailResponseCannotOverwriteCurrentDrawer();
+  await testEmptyDetailExplainsBoundedPreviewWithoutHidingFiles();
   console.log('session-source-tabs.test.js: ok');
 }
 

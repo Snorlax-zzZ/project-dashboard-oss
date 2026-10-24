@@ -71,6 +71,104 @@ fn response_message(role: &str, block_type: &str, text: &str) -> String {
 }
 
 #[test]
+fn codex_titles_skip_ui_wrappers_but_preserve_detail_content() {
+    for wrapper in [
+        "<external_codex_apps_open_page>内部上下文</external_codex_apps_open_page>",
+        "<send_user_message_question_reply>用户答复</send_user_message_question_reply>",
+    ] {
+        for response_only in [false, true] {
+            let tmp = make_tempdir("ui-wrapper-title");
+            let root = tmp.join("sessions");
+            let cache = tmp.join("cache");
+            let sid = "019c0de0-0000-7000-8000-00000000000d";
+            let message = |text: &str| {
+                if response_only {
+                    response_message("user", "input_text", text)
+                } else {
+                    event_message("user_message", text)
+                }
+            };
+            write_rollout(
+                &root,
+                sid,
+                &[meta_line(sid, "/tmp/title", "main"), message(wrapper)],
+            );
+            assert_eq!(
+                scan_codex_at(&root, &cache)[0].title,
+                "",
+                "包装消息不能充当标题"
+            );
+
+            let path = write_rollout(
+                &root,
+                sid,
+                &[
+                    meta_line(sid, "/tmp/title", "main"),
+                    message(wrapper),
+                    message("修复真实用户的问题"),
+                ],
+            );
+            let original = fs::read(&path).unwrap();
+            let metas = scan_codex_at(&root, &cache);
+            assert_eq!(metas[0].title, "修复真实用户的问题");
+            assert!(
+                codex_detail(&metas[0], 5)
+                    .preview
+                    .join("\n")
+                    .contains(wrapper),
+                "标题筛选不得删除详情里的用户答复"
+            );
+            assert_eq!(fs::read(path).unwrap(), original);
+            let _ = fs::remove_dir_all(tmp);
+        }
+    }
+}
+
+#[test]
+fn codex_v2_wrapped_title_cache_recovers_middle_title_without_source_change() {
+    for wrapper in [
+        "<external_codex_apps_open_page>",
+        "<send_user_message_question_reply>",
+    ] {
+        let tmp = make_tempdir("v2-wrapper-cache");
+        let root = tmp.join("sessions");
+        let cache = tmp.join("cache");
+        let sid = "019c0de0-0000-7000-8000-00000000000e";
+        let padding =
+            |size| serde_json::json!({"type":"diagnostic", "padding":"x".repeat(size)}).to_string();
+        let path = write_rollout(
+            &root,
+            sid,
+            &[
+                meta_line(sid, "/tmp/title", "main"),
+                response_message("user", "input_text", wrapper),
+                padding(96 * 1024),
+                response_message("user", "input_text", "被旧缓存遮住的真实标题"),
+                padding(640 * 1024),
+            ],
+        );
+        scan_codex_at(&root, &cache);
+        let cache_file = cache.join(format!("{sid}.json"));
+        let mut stale: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&cache_file).unwrap()).unwrap();
+        stale["version"] = serde_json::json!(2);
+        stale["meta"]["title"] = serde_json::json!(wrapper.chars().take(30).collect::<String>());
+        fs::write(&cache_file, stale.to_string()).unwrap();
+        let original = fs::read(&path).unwrap();
+
+        let found = codex_session_by_id_at(&root, &cache, sid).unwrap();
+        assert_eq!(found.title, "被旧缓存遮住的真实标题");
+        assert_eq!(scan_codex_at(&root, &cache)[0].title, found.title);
+        assert!(
+            codex_detail(&found, 5).preview.is_empty(),
+            "保持原有512KiB详情读取上限"
+        );
+        assert_eq!(fs::read(path).unwrap(), original);
+        let _ = fs::remove_dir_all(tmp);
+    }
+}
+
+#[test]
 fn codex_scan_reads_nested_active_rollout_metadata_and_skips_bad_lines() {
     let tmp = make_tempdir("scan");
     let root = tmp.join("sessions");
@@ -437,7 +535,7 @@ fn codex_scan_recovers_middle_title_from_v1_empty_cache() {
             .unwrap();
     assert_eq!(
         rewritten["version"].as_u64(),
-        Some(2),
+        Some(3),
         "标题解析策略变化必须提升缓存版本"
     );
 

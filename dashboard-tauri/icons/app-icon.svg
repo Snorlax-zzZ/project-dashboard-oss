@@ -1,1 +1,23 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 44 44" aria-hidden="true"><rect width="44" height="44" rx="24" fill="#b7b5ff"/><g fill="#272642"><path d="M22 8a14 14 0 1 0 14 14h-6a8 8 0 1 1-8-8z"/><path d="M26 8h10v10H26z" opacity=".65"/></g></svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="case" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#283a48"/><stop offset=".48" stop-color="#090f16"/><stop offset="1" stop-color="#15212b"/>
+    </linearGradient>
+    <linearGradient id="edge" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#a2bac5"/><stop offset=".35" stop-color="#263c49"/><stop offset=".72" stop-color="#7996a4"/><stop offset="1" stop-color="#172d3a"/>
+    </linearGradient>
+    <linearGradient id="light" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#29f4c7"/><stop offset=".5" stop-color="#0cd9c8"/><stop offset="1" stop-color="#25a9f0"/>
+    </linearGradient>
+    <path id="p" d="M35 93V48a12 12 0 0 1 12-12h13a21 21 0 0 1 0 42H48v15M48 65h12a8 8 0 0 0 0-16H48v16"/>
+    <path id="d" d="M77 36h2a29 29 0 0 1 0 58H63V81h16a16 16 0 0 0 0-32h-2"/>
+  </defs>
+  <rect x="9" y="11" width="110" height="108" rx="27" fill="#020508" opacity=".5"/>
+  <rect x="10" y="10" width="108" height="108" rx="26" fill="url(#case)" stroke="url(#edge)" stroke-width="2"/>
+  <rect x="13" y="13" width="102" height="102" rx="23" fill="none" stroke="#526776" stroke-opacity=".55"/>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <g stroke="#041920" stroke-width="10"><use href="#d"/><use href="#p"/></g>
+    <g stroke="#17606a" stroke-width="6"><use href="#d"/><use href="#p"/></g>
+    <g stroke="url(#light)" stroke-width="2.5"><use href="#d"/><use href="#p"/></g>
+  </g>
+</svg>

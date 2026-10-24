@@ -100,6 +100,18 @@ pub fn list_sessions_paged_for_source(
     page: usize,
     page_size: usize,
 ) -> Result<SessionPage, CommandError> {
+    if crate::partner_sessions::PARTNER_SOURCES.contains(&source_id) {
+        crate::session_storage::default_storage().ensure_initialized()?;
+        let source = crate::partner_sessions::PartnerSessionSource::default_paths(source_id)?;
+        return Ok(crate::sessions::paginate_metas(
+            source.try_scan()?,
+            &crate::session_storage::default_storage().load_favorites()?,
+            query,
+            page,
+            page_size,
+            false,
+        ));
+    }
     match source_id {
         CLAUDE_SOURCE_ID => {
             let source = ClaudeCliSource::default_paths();
@@ -142,7 +154,7 @@ pub fn list_sessions_for_view(
         CODEX_SOURCE_ID => Box::new(CodexSessionSource::default_paths()),
         PI_SOURCE_ID => Box::new(PiSessionSource::default_paths()),
         GROK_SOURCE_ID => Box::new(GrokSessionSource::default_paths()),
-        _ => unreachable!("来源已校验"),
+        id => Box::new(crate::partner_sessions::PartnerSessionSource::default_paths(id)?),
     };
     Ok(list_visible_paged(
         source.as_ref(),
@@ -178,6 +190,12 @@ pub fn session_detail_by_source(
     }
     crate::session_storage::validate_id(session_id)?;
     crate::session_storage::default_storage().ensure_initialized()?;
+    if crate::partner_sessions::PARTNER_SOURCES.contains(&source_id) {
+        return Ok(
+            crate::partner_sessions::PartnerSessionSource::default_paths(source_id)?
+                .detail(session_id)?,
+        );
+    }
     match source_id {
         CLAUDE_SOURCE_ID => Ok(session_detail_by_id(session_id)),
         CODEX_SOURCE_ID => {
@@ -207,13 +225,16 @@ pub fn copy_resume_command_for_source(
     source_id: &str,
     session_id: &str,
 ) -> Result<String, CommandError> {
-    if !matches!(
-        source_id,
-        CLAUDE_SOURCE_ID | CODEX_SOURCE_ID | PI_SOURCE_ID | GROK_SOURCE_ID
-    ) {
-        return Err(CommandError::UnsupportedSessionSource(source_id.to_string()));
+    if !crate::session_storage::SOURCES.contains(&source_id) {
+        return Err(CommandError::UnsupportedSessionSource(
+            source_id.to_string(),
+        ));
     }
     if session_id.is_empty()
+        || !session_id
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
         || session_id.len() > 128
         || !session_id
             .chars()
@@ -228,6 +249,9 @@ pub fn copy_resume_command_for_source(
         PI_SOURCE_ID => Ok(format!("pi --session {session_id}")),
         // grok 的 `--resume` 传非 UUID 会按标题模糊匹配，这里传的是 UUID 故走精确 ID 分支
         GROK_SOURCE_ID => Ok(format!("grok --resume {session_id}")),
+        "opencode" => Ok(format!("opencode --session {session_id}")),
+        "antigravity" => Ok(format!("agy --conversation {session_id}")),
+        "dsh" | "zcode" | "gemini-cli" => Err(CommandError::ResumeUnsupported),
         _ => unreachable!("source allowlist 已在上方校验"),
     }
 }
@@ -1772,6 +1796,7 @@ pub enum CommandError {
     UnsupportedSessionSource(String),
     /// 恢复命令只接受文件名安全字符，拒绝空白、路径与 shell 元字符。
     InvalidSessionId,
+    ResumeUnsupported,
 }
 
 impl std::fmt::Display for CommandError {
@@ -1804,6 +1829,7 @@ impl std::fmt::Display for CommandError {
                 f,
                 "[UNSUPPORTED_SESSION_SOURCE] 不支持的会话来源：{source}"
             ),
+            Self::ResumeUnsupported => write!(f, "[RESUME_UNSUPPORTED] 此工具尚无已验证的恢复入口，请复制会话 ID 在原工具中查找"),
             Self::InvalidSessionId => write!(
                 f,
                 "[INVALID_SESSION_ID] session id 含不允许的字符或长度超限"

@@ -12,7 +12,27 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub const SOURCES: [&str; 4] = ["claude-cli", "codex", "pi", "grok"];
+pub const SOURCES: [&str; 9] = [
+    "claude-cli",
+    "codex",
+    "pi",
+    "grok",
+    "opencode",
+    "antigravity",
+    "dsh",
+    "zcode",
+    "gemini-cli",
+];
+/// 旧收藏无来源字段，只对原四来源保持兼容；显式的新偏好（含 false）覆盖旧值。
+pub fn is_favorite(values: &HashMap<String, bool>, source: &str, sid: &str) -> bool {
+    values
+        .get(&format!("{source}:{sid}"))
+        .copied()
+        .unwrap_or_else(|| {
+            matches!(source, "claude-cli" | "codex" | "pi" | "grok" | "")
+                && values.get(sid).copied().unwrap_or(false)
+        })
+}
 const STORAGE_READ: &str = "SESSION_STORAGE_READ_FAILED";
 const STORAGE_WRITE: &str = "SESSION_STORAGE_WRITE_FAILED";
 pub(crate) const PREFERENCE_READ: &str = "SESSION_PREFERENCE_READ_FAILED";
@@ -279,6 +299,17 @@ impl SessionStorage {
         } else {
             favorites.remove(session_id);
         }
+        self.write_favorites_unlocked(&favorites)?;
+        Ok(next)
+    }
+    pub fn toggle_favorite_for_source(&self, source: &str, session_id: &str) -> Result<bool> {
+        validate_source(source)?;
+        validate_id(session_id)?;
+        self.ensure_initialized()?;
+        let _guard = self.lock("SESSION_PREFERENCE_BUSY")?;
+        let mut favorites = self.load_favorites()?;
+        let next = !is_favorite(&favorites, source, session_id);
+        favorites.insert(format!("{source}:{session_id}"), next);
         self.write_favorites_unlocked(&favorites)?;
         Ok(next)
     }

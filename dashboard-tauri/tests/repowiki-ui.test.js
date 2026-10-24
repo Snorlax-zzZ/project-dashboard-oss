@@ -240,7 +240,9 @@ function testRepoWikiUsesNativeKeyboardControls() {
 }
 
 function testNoAutomaticRepoWikiCalls() {
-  const source = fs.readFileSync(appPath, 'utf8');
+  const original = fs.readFileSync(appPath, 'utf8');
+  for (const lineEnding of ['\n', '\r\n']) {
+  const source = original.replace(/\r\n/g, '\n').replace(/\n/g, lineEnding).replace(/\r\n/g, '\n');
   const refreshAll = source.match(/async function refreshAll\(\) \{([\s\S]*?)\n\}\n\n\/\/ 拉分页/);
   assert.ok(refreshAll, 'refreshAll source block should be found');
   assert.doesNotMatch(refreshAll[1], /invoke\(['"]repowiki_/);
@@ -266,6 +268,7 @@ function testNoAutomaticRepoWikiCalls() {
   const settings = source.match(/async function loadSettings\(\) \{([\s\S]*?)\n\}\n\n\/\/ -------- Utils/);
   assert.ok(settings, 'settings source block should be found');
   assert.match(settings[1], /invoke\('update_repowiki_settings'/);
+  }
 }
 
 async function testMockContractCoverage() {

@@ -2,11 +2,43 @@ use crate::config::Registry;
 use crate::tracker::normalize_git_url;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+#[cfg(unix)]
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus, Stdio};
-use std::time::{Duration, Instant};
+use std::process::{Command, ExitStatus};
+use std::time::Duration;
+#[cfg(unix)]
+use std::{process::Stdio, time::Instant};
 use uuid::Uuid;
+#[cfg(windows)]
+#[path = "repowiki_integrity.rs"]
+mod integrity;
+
+struct V2Read<'a> {
+    repo: &'a Path,
+    #[cfg(windows)]
+    snapshot: integrity::Snapshot,
+}
+impl<'a> V2Read<'a> {
+    fn new(repo: &'a Path) -> Result<Self, RepoWikiError> {
+        Ok(Self {
+            repo,
+            #[cfg(windows)]
+            snapshot: integrity::Snapshot::open(repo)?,
+        })
+    }
+    fn read(&self, relative: &str, max: u64) -> Result<String, RepoWikiError> {
+        let value = read_repowiki_file(self.repo, relative, max)?;
+        #[cfg(windows)]
+        self.snapshot.check(relative, &value)?;
+        Ok(value)
+    }
+    fn finish(&self) -> Result<(), RepoWikiError> {
+        #[cfg(windows)]
+        self.snapshot.finish(self.repo)?;
+        Ok(())
+    }
+}
 
 const PROTOCOL_VERSION: u32 = 1;
 const MAX_SEARCH_BYTES: usize = 512;
@@ -66,6 +98,9 @@ pub enum RepoWikiError {
     InvalidArgument,
     PlatformUnsupported,
     SpawnFailed,
+    ProcessControlFailed,
+    IntegrityChanged,
+    VerificationLimit,
     Timeout,
     OutputTooLarge,
     ProtocolViolation,
@@ -87,6 +122,9 @@ impl RepoWikiError {
             Self::InvalidArgument => "invalid_repowiki_argument",
             Self::PlatformUnsupported => "repowiki_platform_unsupported",
             Self::SpawnFailed => "repowiki_spawn_failed",
+            Self::ProcessControlFailed => "repowiki_process_control_failed",
+            Self::IntegrityChanged => "repowiki_integrity_changed",
+            Self::VerificationLimit => "repowiki_verification_limit",
             Self::Timeout => "repowiki_timeout",
             Self::OutputTooLarge => "repowiki_output_too_large",
             Self::ProtocolViolation => "repowiki_protocol_violation",
@@ -108,8 +146,11 @@ impl std::fmt::Display for RepoWikiError {
             Self::ProjectBindingMismatch => "Dashboard 项目路径与登记的 Git 仓库不一致",
             Self::InvalidProjectPath => "Dashboard 注册的本地项目路径无效",
             Self::InvalidArgument => "RepoWiki 只读请求参数非法",
-            Self::PlatformUnsupported => "当前 RepoWiki 只读适配器仅支持 POSIX 平台",
+            Self::PlatformUnsupported => "当前平台没有可用的 RepoWiki 进程适配器",
             Self::SpawnFailed => "无法启动 RepoWiki CLI",
+            Self::ProcessControlFailed => "无法安全收容或清理 RepoWiki 进程，请重试",
+            Self::IntegrityChanged => "Wiki 正在发布或内容校验不一致，请完成发布后重试",
+            Self::VerificationLimit => "Wiki 代次校验超过读取预算（256 MiB / 4096 文件 / 30 秒），请用 RepoWiki CLI 核验",
             Self::Timeout => "RepoWiki CLI 执行超时，进程已终止",
             Self::OutputTooLarge => "RepoWiki CLI 输出超过安全上限，进程已终止",
             Self::ProtocolViolation => "RepoWiki CLI 返回了无效协议响应",
@@ -124,6 +165,8 @@ struct InvocationContext {
     cli: PathBuf,
     data_root: PathBuf,
     repo: PathBuf,
+    #[cfg(windows)]
+    _pins: Vec<crate::windows_files::Pinned>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -162,8 +205,13 @@ pub fn read_project(
     selector: &RepoWikiProjectSelector,
 ) -> Result<RepoWikiEnvelope, RepoWikiError> {
     let context = resolve_context(dashboard_state_root, local_path, selector)?;
-    let navigation = read_v2_navigation(&context.repo)?;
-    Ok(v2_envelope("read project", json!({ "navigation": navigation })))
+    let files = V2Read::new(&context.repo)?;
+    let navigation = read_v2_navigation(&files)?;
+    files.finish()?;
+    Ok(v2_envelope(
+        "read project",
+        json!({ "navigation": navigation }),
+    ))
 }
 
 // page_id 来自前端点击导航项，取值是 navigation.json 列出的 v2 动态 page_id。
@@ -179,7 +227,8 @@ pub fn read_page(
         return Err(RepoWikiError::InvalidArgument);
     }
     let context = resolve_context(dashboard_state_root, local_path, selector)?;
-    let navigation = read_v2_navigation(&context.repo)?;
+    let files = V2Read::new(&context.repo)?;
+    let navigation = read_v2_navigation(&files)?;
     let pages = navigation
         .get("pages")
         .and_then(|value| value.as_array())
@@ -196,7 +245,8 @@ pub fn read_page(
         .get("title")
         .and_then(|value| value.as_str())
         .unwrap_or(page_id);
-    let content = read_repowiki_file(&context.repo, path, MAX_PAGE_BYTES)?;
+    let content = files.read(path, MAX_PAGE_BYTES)?;
+    files.finish()?;
     Ok(v2_envelope(
         "read page",
         json!({
@@ -219,17 +269,25 @@ pub fn read_generations(
     selector: &RepoWikiProjectSelector,
 ) -> Result<RepoWikiEnvelope, RepoWikiError> {
     let context = resolve_context(dashboard_state_root, local_path, selector)?;
-    let generation = read_v2_generation(&context.repo)?;
+    let files = V2Read::new(&context.repo)?;
+    #[cfg(windows)]
+    files.snapshot.verify_all(&context.repo)?;
+    let generation = read_v2_generation(&files)?;
+    files.finish()?;
     Ok(v2_envelope("read generations", generation))
 }
 
 // v2 正式代次直读。只回传摘要字段：`pages` 有数百条（此处只需摘要），
 // 全量回传对「代次 / 审查」摘要卡没有用处，与 navigation 剔除 source_anchors 同理。
-fn read_v2_generation(repo: &Path) -> Result<Value, RepoWikiError> {
-    let raw = read_repowiki_file(repo, "state/generation.json", MAX_GENERATION_BYTES)?;
+fn read_v2_generation(files: &V2Read<'_>) -> Result<Value, RepoWikiError> {
+    let raw = files.read("state/generation.json", MAX_GENERATION_BYTES)?;
     let document: Value =
         serde_json::from_str(&raw).map_err(|_| RepoWikiError::ProtocolViolation)?;
-    if document.get("schema_version").and_then(|value| value.as_u64()) != Some(2) {
+    if document
+        .get("schema_version")
+        .and_then(|value| value.as_u64())
+        != Some(2)
+    {
         return Err(RepoWikiError::ProtocolViolation);
     }
     let generation_id = document
@@ -245,7 +303,7 @@ fn read_v2_generation(repo: &Path) -> Result<Value, RepoWikiError> {
     };
     let pages = document.get("pages").and_then(|value| value.as_object());
     let page_total = pages.map(|map| map.len()).unwrap_or(0);
-    let reviewed = read_v2_reviewed_total(repo, pages);
+    let reviewed = read_v2_reviewed_total(files, pages)?;
     // 新鲜度需要跟「当前 HEAD / 当前图谱代次」比才能判，那两个值只有 status 有，
     // 故这里只回传生成时的事实，freshness 交前端合并 status 后算，不在此处臆断。
     let integrity = if document.get("status").and_then(|value| value.as_str()) == Some("complete") {
@@ -279,23 +337,31 @@ fn read_v2_generation(repo: &Path) -> Result<Value, RepoWikiError> {
     }))
 }
 
-// 审查态：`state/review.json` 是可选文件，读不出或契约不符都按「无审查记录」算，
-// 不让它拖垮代次展示。注意上游 `_load_review_state` 只接受 v1 固定 page_id，
+// 审查态独立于发布manifest，Windows以本次读取的原文快照绑定并在返回前复核。
+// 缺失可按0处理，存在却损坏或不安全不能伪装成无记录。注意上游只接受v1固定page_id，
 // 因此 v2 wiki 下 entries 实测恒为空；这里按 v2 代次页 id 取交集，不认 v1 残留 id。
 fn read_v2_reviewed_total(
-    repo: &Path,
+    files: &V2Read<'_>,
     pages: Option<&serde_json::Map<String, Value>>,
-) -> usize {
+) -> Result<usize, RepoWikiError> {
     let Some(known) = pages else {
-        return 0;
+        return Ok(0);
     };
-    let Ok(raw) = read_repowiki_file(repo, "state/review.json", MAX_REVIEW_BYTES) else {
-        return 0;
+    #[cfg(windows)]
+    let Some(raw) = files.snapshot.review() else {
+        return Ok(0);
+    };
+    #[cfg(not(windows))]
+    let Ok(raw) = files.read("state/review.json", MAX_REVIEW_BYTES) else {
+        return Ok(0);
     };
     let Ok(document) = serde_json::from_str::<Value>(&raw) else {
-        return 0;
+        #[cfg(windows)]
+        return Err(RepoWikiError::IntegrityChanged);
+        #[cfg(not(windows))]
+        return Ok(0);
     };
-    document
+    Ok(document
         .get("entries")
         .and_then(|value| value.as_object())
         .map(|entries| {
@@ -304,7 +370,7 @@ fn read_v2_reviewed_total(
                 .filter(|page_id| known.contains_key(page_id.as_str()))
                 .count()
         })
-        .unwrap_or(0)
+        .unwrap_or(0))
 }
 
 const MAX_NAVIGATION_BYTES: u64 = 32 * 1024 * 1024;
@@ -326,11 +392,15 @@ fn v2_envelope(command: &str, result: Value) -> RepoWikiEnvelope {
 
 // 读取并精简 v2 navigation.json：只保留导航渲染需要的字段，剔除体积巨大的
 // source_anchors（每页可含数百条源码符号引用，全量回传会让响应膨胀到数 MB）。
-fn read_v2_navigation(repo: &Path) -> Result<Value, RepoWikiError> {
-    let raw = read_repowiki_file(repo, "navigation.json", MAX_NAVIGATION_BYTES)?;
+fn read_v2_navigation(files: &V2Read<'_>) -> Result<Value, RepoWikiError> {
+    let raw = files.read("navigation.json", MAX_NAVIGATION_BYTES)?;
     let document: Value =
         serde_json::from_str(&raw).map_err(|_| RepoWikiError::ProtocolViolation)?;
-    if document.get("schema_version").and_then(|value| value.as_u64()) != Some(2) {
+    if document
+        .get("schema_version")
+        .and_then(|value| value.as_u64())
+        != Some(2)
+    {
         return Err(RepoWikiError::ProtocolViolation);
     }
     let pages = document
@@ -361,7 +431,11 @@ fn read_v2_navigation(repo: &Path) -> Result<Value, RepoWikiError> {
 
 // 安全读取 `<repo>/.repowiki/` 下的文件：拒绝绝对路径 / `..` / 盘符，再用
 // canonical 前缀校验挡住符号链接逃逸，最后限制普通文件与大小。
-fn read_repowiki_file(repo: &Path, relative: &str, max_bytes: u64) -> Result<String, RepoWikiError> {
+fn read_repowiki_file(
+    repo: &Path,
+    relative: &str,
+    max_bytes: u64,
+) -> Result<String, RepoWikiError> {
     if relative.is_empty() {
         return Err(RepoWikiError::InvalidArgument);
     }
@@ -377,19 +451,29 @@ fn read_repowiki_file(repo: &Path, relative: &str, max_bytes: u64) -> Result<Str
     if relative_path.is_absolute() || has_unsafe_component {
         return Err(RepoWikiError::InvalidArgument);
     }
-    let base = std::fs::canonicalize(repo.join(".repowiki"))
-        .map_err(|_| RepoWikiError::InvalidProjectPath)?;
-    let resolved = std::fs::canonicalize(base.join(relative_path))
-        .map_err(|_| RepoWikiError::InvalidArgument)?;
-    if !resolved.starts_with(&base) {
-        return Err(RepoWikiError::InvalidArgument);
+    #[cfg(windows)]
+    {
+        let bytes =
+            crate::windows_files::read(&repo.join(".repowiki").join(relative_path), max_bytes)
+                .map_err(|_| RepoWikiError::InvalidArgument)?;
+        String::from_utf8(bytes).map_err(|_| RepoWikiError::ProtocolViolation)
     }
-    let metadata =
-        std::fs::symlink_metadata(&resolved).map_err(|_| RepoWikiError::InvalidArgument)?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > max_bytes {
-        return Err(RepoWikiError::InvalidArgument);
+    #[cfg(not(windows))]
+    {
+        let base = std::fs::canonicalize(repo.join(".repowiki"))
+            .map_err(|_| RepoWikiError::InvalidProjectPath)?;
+        let resolved = std::fs::canonicalize(base.join(relative_path))
+            .map_err(|_| RepoWikiError::InvalidArgument)?;
+        if !resolved.starts_with(&base) {
+            return Err(RepoWikiError::InvalidArgument);
+        }
+        let metadata =
+            std::fs::symlink_metadata(&resolved).map_err(|_| RepoWikiError::InvalidArgument)?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > max_bytes {
+            return Err(RepoWikiError::InvalidArgument);
+        }
+        std::fs::read_to_string(&resolved).map_err(|_| RepoWikiError::InvalidArgument)
     }
-    std::fs::read_to_string(&resolved).map_err(|_| RepoWikiError::InvalidArgument)
 }
 
 pub fn graph_search(
@@ -549,7 +633,7 @@ fn invoke(
     expected_command: &str,
     command_args: &[String],
 ) -> Result<RepoWikiEnvelope, RepoWikiError> {
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (
             dashboard_state_root,
@@ -573,15 +657,11 @@ fn invoke(
     parse_envelope(&output.stdout, output.status.success(), expected_command)
 }
 
+#[cfg(unix)]
 fn run_bounded(
     mut command: Command,
     limits: ProcessLimits,
 ) -> Result<BoundedOutput, RepoWikiError> {
-    #[cfg(not(unix))]
-    {
-        let _ = (command, limits);
-        return Err(RepoWikiError::PlatformUnsupported);
-    }
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -603,9 +683,7 @@ fn run_bounded(
 
     let status = loop {
         if let Err(error) = drain_nonblocking(&mut stdout_reader, &mut stdout, limits.stdout_bytes)
-            .and_then(|_| {
-                drain_nonblocking(&mut stderr_reader, &mut stderr, limits.stderr_bytes)
-            })
+            .and_then(|_| drain_nonblocking(&mut stderr_reader, &mut stderr, limits.stderr_bytes))
         {
             terminate_child(&mut child);
             return Err(error);
@@ -640,17 +718,40 @@ fn run_bounded(
 fn set_nonblocking<T: std::os::fd::AsRawFd>(stream: &T) -> Result<(), RepoWikiError> {
     let descriptor = stream.as_raw_fd();
     let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFL) };
-    if flags < 0 || unsafe { libc::fcntl(descriptor, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+    if flags < 0 || unsafe { libc::fcntl(descriptor, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0
+    {
         return Err(RepoWikiError::SpawnFailed);
     }
     Ok(())
 }
 
-#[cfg(not(unix))]
-fn set_nonblocking<T>(_stream: &T) -> Result<(), RepoWikiError> {
-    Err(RepoWikiError::PlatformUnsupported)
+#[cfg(windows)]
+fn run_bounded(command: Command, limits: ProcessLimits) -> Result<BoundedOutput, RepoWikiError> {
+    use crate::windows_process::{self, Error, Limits};
+    let args = command.get_args().map(|s| s.to_owned()).collect::<Vec<_>>();
+    let output = windows_process::run(
+        Path::new(command.get_program()),
+        &args,
+        command.get_current_dir(),
+        Limits {
+            timeout: limits.timeout,
+            stdout: Some(limits.stdout_bytes),
+            stderr: Some(limits.stderr_bytes),
+        },
+    )
+    .map_err(|error| match error {
+        Error::Timeout => RepoWikiError::Timeout,
+        Error::OutputTooLarge => RepoWikiError::OutputTooLarge,
+        Error::Spawn(_) => RepoWikiError::SpawnFailed,
+        _ => RepoWikiError::ProcessControlFailed,
+    })?;
+    Ok(BoundedOutput {
+        status: output.status,
+        stdout: output.stdout,
+    })
 }
 
+#[cfg(unix)]
 fn drain_nonblocking(
     reader: &mut impl Read,
     output: &mut Vec<u8>,
@@ -672,6 +773,7 @@ fn drain_nonblocking(
     }
 }
 
+#[cfg(unix)]
 fn terminate_child(child: &mut std::process::Child) {
     terminate_process_group(child.id());
     let _ = child.kill();
@@ -690,9 +792,6 @@ fn terminate_process_group(process_id: u32) {
         let _ = unsafe { kill(-group, SIGKILL) };
     }
 }
-
-#[cfg(not(unix))]
-fn terminate_process_group(_process_id: u32) {}
 
 fn resolve_context(
     dashboard_state_root: &Path,
@@ -751,13 +850,29 @@ fn resolve_context(
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
         return Err(RepoWikiError::InvalidProjectPath);
     }
+    #[cfg(not(windows))]
     let repo =
         std::fs::canonicalize(lexical_repo).map_err(|_| RepoWikiError::InvalidProjectPath)?;
+    #[cfg(windows)]
+    let (repo, pins) = {
+        let cli_pin =
+            crate::windows_files::pin_file(&cli).map_err(|_| RepoWikiError::InvalidCliPath)?;
+        let repo_pin = crate::windows_files::pin_directory(&lexical_repo)
+            .map_err(|_| RepoWikiError::InvalidProjectPath)?;
+        let mut pins = vec![cli_pin, repo_pin];
+        pins.push(
+            crate::windows_files::pin_existing_parent(&data_root)
+                .map_err(|_| RepoWikiError::InvalidDataRoot)?,
+        );
+        (lexical_repo, pins)
+    };
     verify_project_binding(&repo, &expected_git_urls)?;
     Ok(InvocationContext {
         cli,
         data_root,
         repo,
+        #[cfg(windows)]
+        _pins: pins,
     })
 }
 
@@ -783,6 +898,13 @@ fn read_origin_url(repo: &Path) -> Option<String> {
     parse_origin_url(&content)
 }
 
+#[cfg(windows)]
+fn resolve_git_config_path(repo: &Path) -> Option<PathBuf> {
+    crate::windows_files::pin_directory(&repo.join(".git")).ok()?;
+    Some(repo.join(".git/config"))
+}
+
+#[cfg(not(windows))]
 fn resolve_git_config_path(repo: &Path) -> Option<PathBuf> {
     const MAX_GIT_POINTER_BYTES: u64 = 4096;
     let dot_git = repo.join(".git");
@@ -852,6 +974,12 @@ fn resolve_git_config_path(repo: &Path) -> Option<PathBuf> {
     Some(common_dir.join("config"))
 }
 
+#[cfg(windows)]
+fn read_regular_text(path: &Path, max_bytes: u64) -> Option<String> {
+    String::from_utf8(crate::windows_files::read(path, max_bytes).ok()?).ok()
+}
+
+#[cfg(not(windows))]
 fn read_regular_text(path: &Path, max_bytes: u64) -> Option<String> {
     let metadata = std::fs::symlink_metadata(&path).ok()?;
     if metadata.file_type().is_symlink()
@@ -872,6 +1000,8 @@ fn read_regular_text(path: &Path, max_bytes: u64) -> Option<String> {
 
 fn parse_origin_url(content: &str) -> Option<String> {
     let mut origin_section = false;
+    #[cfg(windows)]
+    let mut origin = None;
     for raw_line in content.lines() {
         let line = raw_line.trim();
         if line.starts_with('[') {
@@ -880,6 +1010,10 @@ fn parse_origin_url(content: &str) -> Option<String> {
                 .filter(|character| !character.is_whitespace())
                 .collect::<String>()
                 .to_ascii_lowercase();
+            // include 的有效顺序可能让 Git 使用另一条 origin；不读取仓外配置。
+            if cfg!(windows) && (compact.starts_with("[include]") || compact.starts_with("[includeif")) {
+                return None;
+            }
             origin_section = compact == "[remote\"origin\"]";
             continue;
         }
@@ -892,11 +1026,22 @@ fn parse_origin_url(content: &str) -> Option<String> {
         if key.trim().eq_ignore_ascii_case("url") {
             let value = value.trim();
             if !value.is_empty() {
+                #[cfg(windows)]
+                {
+                    if origin.is_some() {
+                        return None;
+                    }
+                    origin = Some(value.to_string());
+                }
+                #[cfg(not(windows))]
                 return Some(value.to_string());
             }
         }
     }
-    None
+    #[cfg(windows)]
+    { origin }
+    #[cfg(not(windows))]
+    { None }
 }
 
 fn configured_absolute_path(
@@ -913,6 +1058,16 @@ fn configured_absolute_path(
 }
 
 fn validate_cli(path: &Path) -> Result<(), RepoWikiError> {
+    #[cfg(windows)]
+    {
+        if !path
+            .extension()
+            .is_some_and(|s| s.eq_ignore_ascii_case("exe"))
+        {
+            return Err(RepoWikiError::InvalidCliPath);
+        }
+        crate::windows_files::pin_file(path).map_err(|_| RepoWikiError::InvalidCliPath)?;
+    }
     let metadata = std::fs::symlink_metadata(path).map_err(|_| RepoWikiError::InvalidCliPath)?;
     if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
         return Err(RepoWikiError::InvalidCliPath);
@@ -927,6 +1082,12 @@ fn validate_cli(path: &Path) -> Result<(), RepoWikiError> {
     Ok(())
 }
 
+#[cfg(windows)]
+fn validate_data_root(path: &Path) -> Result<(), RepoWikiError> {
+    crate::windows_files::validate_existing_parent(path).map_err(|_| RepoWikiError::InvalidDataRoot)
+}
+
+#[cfg(not(windows))]
 fn validate_data_root(path: &Path) -> Result<(), RepoWikiError> {
     match std::fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() => {
@@ -1115,10 +1276,18 @@ mod process_tests {
 
         assert_eq!(output.stdout, b"ok");
         let deadline = Instant::now() + Duration::from_secs(2);
-        while !outcome.exists() && Instant::now() < deadline {
+        // open("w") 会先创建空文件，子进程写入完成前不能仅凭 exists 判断就绪。
+        let result = loop {
+            match fs::read_to_string(&outcome) {
+                Ok(value) if !value.is_empty() => break value,
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => panic!("读取子进程测试结果失败：{error}"),
+            }
+            assert!(Instant::now() < deadline, "子进程未在期限内写完测试结果");
             std::thread::sleep(Duration::from_millis(10));
-        }
-        assert_eq!(fs::read_to_string(&outcome).unwrap(), "blocked");
+        };
+        assert_eq!(result, "blocked");
         let _ = fs::remove_file(outcome);
     }
 }

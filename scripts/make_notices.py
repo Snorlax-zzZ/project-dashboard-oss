@@ -1,5 +1,6 @@
 """从锁定依赖的许可证文件生成随 App 分发的声明；不安装依赖。"""
 
+import argparse
 import json
 import os
 import subprocess
@@ -8,28 +9,40 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 THIRD_PARTY = ROOT / "third-party"
+SUPPORTED_TARGETS = ["aarch64-apple-darwin", "x86_64-pc-windows-msvc"]
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--target", choices=SUPPORTED_TARGETS)
+    args = parser.parse_args()
+    target = args.target
+    if target is None:
+        info = subprocess.check_output(["rustc", "-vV"], text=True, encoding="utf-8")
+        target = next(line.removeprefix("host: ") for line in info.splitlines() if line.startswith("host: "))
+        if target not in SUPPORTED_TARGETS:
+            raise SystemExit("尚未验证此宿主平台的发布声明，请显式选择受支持目标。")
     command = [
         "cargo", "metadata", "--locked", "--format-version", "1",
-        "--filter-platform", "aarch64-apple-darwin",
+        "--filter-platform", target,
     ]
     if os.environ.get("DASHBOARD_OFFLINE") == "1":
         command.append("--offline")
-    metadata = json.loads(subprocess.check_output(command, cwd=ROOT, text=True))
-    fallbacks = json.loads((THIRD_PARTY / "rust-license-fallbacks.json").read_text())
+    metadata = json.loads(subprocess.check_output(command, cwd=ROOT, text=True, encoding="utf-8"))
+    fallbacks = json.loads((THIRD_PARTY / "rust-license-fallbacks.json").read_text(encoding="utf-8"))
     sections = [
         "project-dashboard 第三方声明\n",
-        (ROOT / "LICENSE").read_text(),
+        (ROOT / "LICENSE").read_text(encoding="utf-8"),
         "Marked 15.0.12\nhttps://github.com/markedjs/marked/tree/v15.0.12\n"
-        + (THIRD_PARTY / "marked-LICENSE.txt").read_text(),
+        + (THIRD_PARTY / "marked-LICENSE.txt").read_text(encoding="utf-8"),
         "Lucide / Feather 内联图标（路径及笔画有调整）\n"
         "https://github.com/lucide-icons/lucide/tree/500620a2e8123f8d1db191538886dc0c223f69a9\n"
-        + (THIRD_PARTY / "lucide-LICENSE.txt").read_text(),
+        + (THIRD_PARTY / "lucide-LICENSE.txt").read_text(encoding="utf-8"),
         "Feather 图标\n"
         "https://github.com/feathericons/feather/tree/3dc050d97405062eba78aa57115c0a15c63abdaa\n"
-        + (THIRD_PARTY / "feather-LICENSE.txt").read_text(),
+        + (THIRD_PARTY / "feather-LICENSE.txt").read_text(encoding="utf-8"),
+        "内嵌 SQLite\n" + (THIRD_PARTY / "sqlite-PUBLIC-DOMAIN.txt").read_text(encoding="utf-8"),
+        "内嵌 Zstandard（选择 BSD-3-Clause）\n" + (THIRD_PARTY / "zstd-LICENSE.txt").read_text(encoding="utf-8"),
     ]
     count = 0
     for package in sorted(metadata["packages"], key=lambda p: (p["name"], p["version"])):

@@ -6,8 +6,8 @@
     const copy = value => JSON.parse(JSON.stringify(value));
     const iso = minutes => new Date(now - minutes * 60000).toISOString();
     const mac = 'mbp-demo01', win = 'win-demo02';
-    const sourceCounts = { 'claude-cli': 143, codex: 126, pi: 67, grok: 52 };
-    const prefixes = { 'claude-cli':'claude --resume ', codex:'codex resume ', pi:'pi --session ', grok:'grok --resume ' };
+    const sourceCounts = { 'claude-cli': 143, codex: 126, pi: 67, grok: 52, opencode:83, antigravity:64, dsh:71, zcode:69, 'gemini-cli':75 };
+    const prefixes = { 'claude-cli':'claude --resume ', codex:'codex resume ', pi:'pi --session ', grok:'grok --resume ', opencode:'opencode --session ', antigravity:'agy --conversation ' };
     const names = ['project-dashboard','atlas-api','repowiki','design-system','fleet-agent','notes-engine','docs-site','task-runner'];
     const titles = ['核对会话分页与来源隔离','修复缓存索引更新','梳理项目注册表逻辑','补齐错误状态提示','检查本地数据读取','收敛组件间距与字号','验证跨机快照聚合','整理代码知识导航','完善配置校验提示','处理长路径与表格滚动','优化最近提交展示','回归会话恢复命令'];
     let projects = { shared:names.map((name,i)=>({project_id:`a000000${i}-d123-4000-8000-1234567890ab`,name,git_url:`https://github.com/demo/${name}`,machines:{[mac]:`~/code/${name}`,[win]:`D:\\code\\${name}`},sync:true})), private:[{project_id:null,name:'private-scratch',git_url:'https://github.com/demo/private-scratch',path:'~/code/private-scratch',sync:false}] };
@@ -34,7 +34,7 @@
       {page_id:'contracts',title:'接口与数据契约',path:'wiki/contracts.md',page_type:'section',parent_page_id:'home',order:4},
     ]};
     const bodies={
-      home:'# 项目总览\n\nproject-dashboard 汇总本机会话历史、跨机项目状态与代码知识。\n\n## 五个工作入口\n\n| 入口 | 数据 | 展示方式 |\n| --- | --- | --- |\n| Session Board | 来源会话元数据 | 搜索、分页表格、详情抽屉 |\n| Fleet Board | registry 与 snapshot | 分组表格与各机快照 |\n| 项目管理 | 共享与私有项目 | 表格与登记表单 |\n| 代码知识 | 已发布 Wiki 与图谱 | 只读导航和按需查询 |\n| 设置 | 本机配置 | 表单与身份检查 |\n\n[阅读系统架构](repowiki:architecture) · [会话采集与缓存](repowiki:sessions)\n\n> 本文是为样式预览编写的示例文档。',
+      home:'# 项目总览\n\nproject-dashboard 汇总本机会话历史、跨机项目状态与代码知识。\n\n## 五个工作入口\n\n| 入口 | 数据 | 展示方式 |\n| --- | --- | --- |\n| 会话看板 | 来源会话元数据 | 搜索、分页表格、详情抽屉 |\n| 协作看板 | registry 与 snapshot | 分组表格与各机快照 |\n| 项目管理 | 共享与私有项目 | 表格与登记表单 |\n| 代码知识 | 已发布 Wiki 与图谱 | 只读导航和按需查询 |\n| 设置 | 本机配置 | 表单与身份检查 |\n\n[阅读系统架构](repowiki:architecture) · [会话采集与缓存](repowiki:sessions)\n\n> 本文是为样式预览编写的示例文档。',
       architecture:'# 系统架构\n\n## 读取路径\n\n桌面前端通过固定的 IPC 调用 Rust 引擎。会话查询按来源选择采集器，利用本地缓存减少重复解析。\n\n```mermaid\nflowchart LR\n A[桌面前端] --> B[固定 IPC]\n B --> C[Rust 引擎]\n C --> D[本地会话缓存]\n C --> E[项目快照]\n```\n\n前端只渲染当前页；详情和 Wiki 正文按用户操作加载。\n\n[返回总览](repowiki:home)',
       sessions:'# 会话采集与缓存\n\n## 列表与详情分开读取\n\n1. 选择 Claude Code、Codex、pi 或 Grok 来源。\n2. 来源扫描器检查缓存与文件变化。\n3. 后端按收藏、时间排序，全文检索后分页切片。\n4. 前端收到 `total / page / page_size / items`。\n5. 点击行后，单独读取最近五轮对话。\n\n```rust\nlist_sessions_paged_for_source(source, query, page, page_size)\n```\n\n### 保持效率的边界\n\n列表不预载全部会话正文，不将所有来源混入一个无限滚动列表。\n\n[接口契约](repowiki:contracts)',
       modules:'# 模块说明\n\n- [核心引擎](repowiki:core)：来源扫描、缓存、分页、跨机聚合。\n- [桌面前端](repowiki:frontend)：列表与表单渲染、用户事件和只读展示。',
@@ -89,15 +89,16 @@
           return {source:args.source,session_id:args.sessionId,hidden:args.hidden};
         }
         case 'toggle_favorite':{
-          const s=Object.values(sessions).flat().find(s=>s.session_id===args.sessionId);
+          const s=(sessions[args.source]||[]).find(s=>s.session_id===args.sessionId);
           if(!s)throw new Error('会话不存在');
           s.favorited=!s.favorited; return s.favorited;
         }
         case 'session_detail':{
           const s=lookupSession(args);
+          if(s.source==='antigravity')return {preview:[],files:[],summary:'这是合成的会话摘要，用于验证布局。',notice:'此工具目前仅支持会话摘要，暂不支持完整对话。'};
           return {preview:[`🧑 帮我检查 ${s.projects} 的当前实现，重点看「${s.title||'会话缓存'}」。`,'🤖 我会先核对数据读取、分页参数和界面状态，保留已有功能。','🧑 切换来源时要保留各自的搜索词和页码。','🤖 已确认每个来源维护独立的 `query / page / pageSize / total / items`，请求返回后也会核对来源与请求序号。','🧑 全文搜索也要保持，不要只搜索这一页。','🤖 搜索由后端针对缓存元数据与检索字段执行，过滤后再分页。前端不会对当前页再次过滤。','🧑 详情里展示哪些内容？','🤖 点击行后读取最近 **5 轮对话**、改动文件和完整会话 ID。恢复命令按来源生成。','🧑 好，先保留这些交互，只调整外观。','🤖 已整理检查结果。\n\n- 四来源状态独立\n- 列表分页读取\n- 详情按需加载\n- 空态与错误态保留\n\n这是一段用于排版与滚动验证的示例对话。'],files:s.source==='grok'?[]:['dashboard-core/src/sessions.rs','dashboard-tauri/dist/app.js','dashboard-tauri/dist/app.css']};
         }
-        case 'copy_resume_command':lookupSession(args);return prefixes[args.source]+args.sessionId;
+        case 'copy_resume_command':lookupSession(args);if(!prefixes[args.source])throw new Error('RESUME_UNSUPPORTED');return prefixes[args.source]+args.sessionId;
         case 'list_projects':return projects;
         case 'aggregate_fleet_board':if(scenario==='error')throw new Error('演示：snapshot 读取失败');return fleet();
         case 'get_settings':return settings;

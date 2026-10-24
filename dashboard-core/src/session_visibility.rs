@@ -140,7 +140,11 @@ pub fn list_visible_paged(
     storage.ensure_initialized()?;
     let hidden = storage.load_hidden()?;
     let favorites = storage.load_favorites()?;
-    let mut metas = source.scan();
+    let mut metas = source.try_scan()?;
+    // 来源由已选择的扫描器决定，不能信任旧缓存内的 source 字段。
+    for meta in &mut metas {
+        meta.source = source.source_id().to_owned();
+    }
     metas.retain(|meta| {
         hidden.contains(source.source_id(), &meta.session_id) == (visibility == Visibility::Hidden)
     });

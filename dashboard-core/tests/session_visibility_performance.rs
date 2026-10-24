@@ -1,6 +1,6 @@
 //! 手动性能探针：真实四来源扫描、偏好读取、筛选与分页，不设机器相关的耗时门槛。
 use dashboard_core::{
-    session_storage::{SessionStorage, SOURCES},
+    session_storage::SessionStorage,
     session_visibility::{list_visible_paged, Visibility},
     sessions::{
         ClaudeCliSource, CodexSessionSource, GrokSessionSource, PiSessionSource, SessionMeta,
@@ -59,7 +59,7 @@ fn real_sources_visibility_query_cost() {
     let ids: Vec<_> = (0..1000)
         .map(|i| format!("00000000-0000-4000-8000-{i:012x}"))
         .collect();
-    for source in SOURCES {
+    for source in ["claude-cli", "codex", "pi", "grok"] {
         let root = base.join(source);
         let s = SessionStorage::new(root.join("sessions"), root.join("legacy"));
         let source_root = root.join("harness");

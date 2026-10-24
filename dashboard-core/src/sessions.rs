@@ -13,7 +13,7 @@ pub const CLAUDE_SOURCE_ID: &str = "claude-cli";
 pub const CODEX_SOURCE_ID: &str = "codex";
 pub const PI_SOURCE_ID: &str = "pi";
 pub const GROK_SOURCE_ID: &str = "grok";
-const CODEX_CACHE_VERSION: u32 = 2;
+const CODEX_CACHE_VERSION: u32 = 3;
 const PI_CACHE_VERSION: u32 = 1;
 const GROK_CACHE_VERSION: u32 = 1;
 pub const HEAD_CHUNK: usize = 64 * 1024;
@@ -113,6 +113,10 @@ impl SessionMeta {
 pub struct SessionDetail {
     pub preview: Vec<String>,
     pub files: Vec<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub summary: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub notice: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -623,6 +627,10 @@ pub trait SessionSource {
     fn source_id(&self) -> &'static str;
     /// 全量扫描本 source 的会话 meta。返回值里每条 meta.source 应等于 self.source_id()。
     fn scan(&self) -> Vec<SessionMeta>;
+    /// 产品入口传播来源错误；兼容既有只返回 Vec 的扫描器。
+    fn try_scan(&self) -> Result<Vec<SessionMeta>, crate::session_storage::SessionStorageError> {
+        Ok(self.scan())
+    }
 }
 
 /// v1 默认 source：读 `~/.claude/projects/**/*.jsonl`（Claude Code CLI 落盘位置）+ 用本地 cache。
@@ -699,6 +707,22 @@ fn codex_clean_text(text: &str) -> String {
         String::new()
     } else {
         text.to_string()
+    }
+}
+
+// 只排除包装消息作为标题，保留其详情/搜索内容；同时识别旧缓存截断后的标签。
+fn codex_title(text: &str) -> String {
+    let title = truncate_chars(text, 30);
+    if [
+        "<external_codex_apps_open_page",
+        "<send_user_message_question_reply",
+    ]
+    .iter()
+    .any(|prefix| title.starts_with(&truncate_chars(prefix, 30)))
+    {
+        String::new()
+    } else {
+        title
     }
 }
 
@@ -913,12 +937,12 @@ pub fn scan_codex_at(root: &Path, cache: &Path) -> Vec<SessionMeta> {
             {
                 let text = codex_message_text(&obj);
                 if !text.is_empty() {
-                    meta.title = truncate_chars(&text, 30);
+                    meta.title = codex_title(&text);
                 }
             }
             if response_title.is_empty() {
                 if let Some(("user", text)) = codex_response_message(&obj) {
-                    response_title = truncate_chars(&text, 30);
+                    response_title = codex_title(&text);
                 }
             }
         }
@@ -950,7 +974,7 @@ pub fn scan_codex_at(root: &Path, cache: &Path) -> Vec<SessionMeta> {
                     }
                     continue;
                 }
-                previous_title = cached.meta.title;
+                previous_title = codex_title(&cached.meta.title);
                 previous_projects = cached
                     .meta
                     .projects
@@ -979,7 +1003,7 @@ pub fn scan_codex_at(root: &Path, cache: &Path) -> Vec<SessionMeta> {
                     let text = codex_message_text(&obj);
                     if !text.is_empty() {
                         if meta.title.is_empty() && event_type == "user_message" {
-                            meta.title = truncate_chars(&text, 30);
+                            meta.title = codex_title(&text);
                         }
                         event_haystack_parts.push(truncate_chars(&text, 400));
                     }
@@ -987,7 +1011,7 @@ pub fn scan_codex_at(root: &Path, cache: &Path) -> Vec<SessionMeta> {
             }
             if let Some((role, text)) = codex_response_message(&obj) {
                 if response_title.is_empty() && role == "user" {
-                    response_title = truncate_chars(&text, 30);
+                    response_title = codex_title(&text);
                 }
                 response_haystack_parts.push(truncate_chars(&text, 400));
             }
@@ -1009,13 +1033,15 @@ pub fn scan_codex_at(root: &Path, cache: &Path) -> Vec<SessionMeta> {
                 {
                     let text = codex_message_text(&obj);
                     if !text.is_empty() {
-                        meta.title = truncate_chars(&text, 30);
-                        break;
+                        meta.title = codex_title(&text);
+                        if !meta.title.is_empty() {
+                            break;
+                        }
                     }
                 }
                 if response_title.is_empty() {
                     if let Some(("user", text)) = codex_response_message(&obj) {
-                        response_title = truncate_chars(&text, 30);
+                        response_title = codex_title(&text);
                     }
                 }
             }
@@ -1161,6 +1187,7 @@ pub fn codex_detail(meta: &SessionMeta, rounds: usize) -> SessionDetail {
     SessionDetail {
         preview: kept_rev,
         files: files[files_start..].to_vec(),
+        ..Default::default()
     }
 }
 
@@ -1488,6 +1515,7 @@ pub fn pi_detail(meta: &SessionMeta, rounds: usize) -> SessionDetail {
     SessionDetail {
         preview: kept_rev,
         files: files[files_start..].to_vec(),
+        ..Default::default()
     }
 }
 
@@ -1799,6 +1827,7 @@ pub fn grok_detail(meta: &SessionMeta, rounds: usize) -> SessionDetail {
     SessionDetail {
         preview: kept_rev,
         files: Vec::new(),
+        ..Default::default()
     }
 }
 
@@ -1873,7 +1902,7 @@ pub(crate) fn paginate_metas(
 ) -> SessionPage {
     let page_size = page_size.clamp(1, 500);
     for meta in &mut all {
-        meta.favorited = favorites.get(&meta.session_id).copied().unwrap_or(false);
+        meta.favorited = crate::session_storage::is_favorite(&favorites, &meta.source, &meta.session_id);
     }
     // 排序：收藏的优先（favorited 倒排），同收藏状态内按 mtime 倒排
     all.sort_by(|a, b| {
@@ -2140,7 +2169,7 @@ pub fn toggle_favorite(session_id: &str) -> std::io::Result<bool> {
 pub fn apply_favorites(metas: &mut [SessionMeta]) {
     let favorites = load_favorites();
     for meta in metas.iter_mut() {
-        meta.favorited = favorites.get(&meta.session_id).copied().unwrap_or(false);
+        meta.favorited = crate::session_storage::is_favorite(&favorites, &meta.source, &meta.session_id);
     }
 }
 

@@ -1,277 +1,457 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-palette="obsidian" data-mode="dark">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>project-dashboard</title>
+  <title>project-dashboard · Spatial Studio</title>
+  <link rel="icon" type="image/svg+xml" href="./logo.svg" />
+  <script src="./i18n.js"></script>
   <script src="./appearance.js"></script>
   <link rel="stylesheet" href="./app.css" />
   <link rel="stylesheet" href="./appearance.css" />
 </head>
 <body>
-  <div class="app" id="app">
-    <aside class="sidebar" aria-label="主导航">
-      <div class="logo">
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 44 44" role="img" aria-label="project-dashboard"><rect width="44" height="44" rx="24" fill="var(--accent)"/><g fill="var(--on-accent)"><path d="M22 8a14 14 0 1 0 14 14h-6a8 8 0 1 1-8-8z"/><path d="M26 8h10v10H26z" opacity=".65"/></g></svg>
-        <span>project-dashboard</span>
-      </div>
-      <button class="nav-item active" data-tab="sessions" type="button">
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"  fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-5 3v-3a2 2 0 0 1-2-2V7a3 3 0 0 1 3-3z"/><path d="M7 9h10M7 13h6"/></svg>
-        Session Board
-      </button>
-      <button class="nav-item" data-tab="fleet" type="button">
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"  fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="13" height="12" rx="3"/><path d="M8 15v3a3 3 0 0 0 3 3h7a3 3 0 0 0 3-3v-7a3 3 0 0 0-3-3h-2M8 9h3"/></svg>
-        Fleet Board
-      </button>
-      <button class="nav-item" data-tab="projects" type="button">
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"  fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8a3 3 0 0 1 3-3h3l3 3h6a3 3 0 0 1 3 3v7a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3z"/><path d="M8 13h8"/></svg>
-        项目管理
-      </button>
-      <button class="nav-item" data-tab="repowiki" type="button">
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"  fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h13v18H6a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3zM3 17c2-2 4-2 6-2h10M14 3v7l-2-2-2 2V3"/></svg>
-        代码知识
-      </button>
-      <div class="sidebar-tools" role="group" aria-label="设置与外观">
-        <button class="nav-item sidebar-icon-button" data-tab="settings" type="button" title="设置" aria-label="设置">
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"  fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M7 9h10M7 15h10M10 7v4M14 13v4"/></svg>
-          <span class="visually-hidden">设置</span>
-        </button>
-        <button class="sidebar-icon-button" id="btn-theme-toggle" type="button" title="切换到深色" aria-label="深色模式" aria-pressed="false">
-          <svg class="theme-icon-moon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"  fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20.6 14A8.8 8.8 0 0 1 10 3.4 8.8 8.8 0 1 0 20.6 14z"/></svg><svg class="theme-icon-sun" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"  fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.4 1.4M17.6 17.6 19 19M5 19l1.4-1.4M17.6 6.4 19 5"/></svg>
-        </button>
-        <span class="appearance-label" id="appearance-label" aria-live="polite">浅色</span>
+  <div class="studio-shell app" id="app">
+    <!-- 左侧立体独立导航舱 -->
+    <aside class="studio-sidebar sidebar" aria-label="主导航" data-i18n-aria-label="主导航">
+      <div class="brand logo">
+        <span class="brand-mark logo-mark" style="background:transparent;box-shadow:none;width:32px;height:32px;padding:0;">
+          <img class="brand-logo-image" src="./logo.svg" width="32" height="32" alt="" aria-hidden="true" />
+        </span>
+        <div class="brand-text">
+          <div class="brand-title">project-dashboard</div>
+          <div class="brand-sub">Spatial Studio</div>
+        </div>
       </div>
 
-      <div class="sidebar-version" id="app-version" title="当前 App 版本"></div>
+      <div class="nav-group-label" data-i18n="工作空间">工作空间</div>
+      <button class="nav-btn nav-item active" data-tab="sessions" type="button">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        <span data-i18n="会话看板">会话看板</span>
+      </button>
+      <button class="nav-btn nav-item" data-tab="fleet" type="button">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="3" width="20" height="7" rx="1.5"/><rect x="2" y="14" width="20" height="7" rx="1.5"/><line x1="6" y1="6.5" x2="6.01" y2="6.5"/><line x1="6" y1="17.5" x2="6.01" y2="17.5"/></svg>
+        <span data-i18n="协作看板">协作看板</span>
+      </button>
+      <button class="nav-btn nav-item" data-tab="projects" type="button">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        <span data-i18n="项目管理">项目管理</span>
+      </button>
+      <button class="nav-btn nav-item" data-tab="repowiki" type="button">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+        <span data-i18n="代码知识">代码知识</span>
+      </button>
+
+      <div class="nav-group-label" data-i18n="系统与偏好">系统与偏好</div>
+      <button class="nav-btn nav-item" data-tab="settings" type="button">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.604.852.997 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        <span data-i18n="设置">设置</span>
+      </button>
+
+      <div class="sidebar-bottom">
+        <div class="sidebar-tools appearance-control" role="group" aria-label="外观" data-i18n-aria-label="外观">
+          <button class="sidebar-icon-button" id="btn-theme-toggle" type="button" title="切换到深色" aria-label="深色模式" aria-pressed="false" data-i18n-title="切换到深色" data-i18n-aria-label="深色模式">
+            <svg class="theme-icon-moon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M20.6 14A8.8 8.8 0 0 1 10 3.4 8.8 8.8 0 1 0 20.6 14z"/></svg>
+            <svg class="theme-icon-sun" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.4 1.4M17.6 17.6 19 19M5 19l1.4-1.4M17.6 6.4 19 5"/></svg>
+          </button>
+          <button class="appearance-picker-trigger" id="btn-appearance-picker" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="appearance-picker" title="选择主题" data-i18n-title="选择主题">
+            <span class="appearance-current"><span id="appearance-theme-name" data-i18n="曜石翡翠">曜石翡翠</span><span class="appearance-label" id="appearance-label" aria-live="polite" data-i18n="深色">深色</span></span>
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m7 14 5-5 5 5"/></svg>
+          </button>
+        </div>
+
+        <div class="machine-pill" id="sidebar-machine-pill" title="本机硬件绑定 ID" data-i18n-title="本机硬件绑定 ID">
+          <span class="dot-ok"></span>
+          <span class="mono" id="sidebar-machine-id" data-i18n="读取身份中…">读取身份中…</span>
+        </div>
+
+        <div class="sidebar-foot-row">
+          <span class="muted mono" id="app-version">v0.2.20</span>
+          <span class="muted" style="font-size:11px;">Spatial Studio</span>
+        </div>
+      </div>
     </aside>
 
-    <header class="topbar">
-      <div class="status" id="sync-status">加载中…</div>
-      <div class="actions">
-        <button class="btn ghost" id="btn-refresh"
-                aria-label="重新读取本地 registry 与 snapshot"
-                title="重新读取本地 registry + snapshot（不触发跨机 push / pull）">
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"  fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 8a9 9 0 1 0 1 8M20 2v6h-6"/></svg>
-          重新读取
-        </button>
-        <button class="btn primary" id="btn-sync"
-                aria-label="立即触发全量跨机同步"
-                title="立即触发全量采集 + push + pull（网络操作，可能耗时 3-10 秒）">
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"  fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7a9 9 0 0 0-15-2L2 8h7M2 2v6M4 17a9 9 0 0 0 15 2l3-3h-7M22 22v-6"/></svg>
-          手动同步
-        </button>
-      </div>
-    </header>
-
-    <main class="main" id="main">
+    <!-- 右侧独立立体主舞台 -->
+    <div class="studio-stage main" id="main">
       <!-- 身份不可用横幅：取不到硬件标识时才显示。不可关闭 —— 带着假身份同步会污染跨机数据。 -->
       <div class="banner err" id="machine-identity-banner" style="display:none"></div>
-      <!-- Session Board -->
-      <section id="page-sessions" class="page">
-        <h2 class="page-title">Session Board</h2>
-        <div class="card">
-          <div class="session-source-tabs" role="tablist" aria-label="会话来源">
-            <button class="session-source-tab active" type="button" role="tab"
-                    id="session-source-tab-claude" data-session-source="claude-cli"
-                    aria-selected="true" aria-controls="session-source-panel" tabindex="0">
-              Claude Code
-            </button>
-            <button class="session-source-tab" type="button" role="tab"
-                    id="session-source-tab-codex" data-session-source="codex"
-                    aria-selected="false" aria-controls="session-source-panel" tabindex="-1">
-              Codex
-            </button>
-            <button class="session-source-tab" type="button" role="tab"
-                    id="session-source-tab-pi" data-session-source="pi"
-                    aria-selected="false" aria-controls="session-source-panel" tabindex="-1">
-              pi
-            </button>
-            <button class="session-source-tab" type="button" role="tab"
-                    id="session-source-tab-grok" data-session-source="grok"
-                    aria-selected="false" aria-controls="session-source-panel" tabindex="-1">
-              Grok
-            </button>
+
+      <!-- 顶部悬浮控制栏 -->
+      <header class="studio-topbar topbar">
+        <div class="topbar-left">
+          <div class="topbar-title" id="topbar-title" data-i18n="会话看板 · 会话工作台">会话看板 · 会话工作台</div>
+        </div>
+        <div class="topbar-right actions">
+          <div class="sync-pill status" id="sync-status">
+            <span class="dot-ok"></span>
+            <span id="sync-status-text" data-i18n="加载中…">加载中…</span>
           </div>
-          <div id="session-source-panel" role="tabpanel" aria-labelledby="session-source-tab-claude">
-          <div class="toolbar">
-            <label class="session-visibility-control"><select class="input" id="session-visibility" aria-label="会话显示范围"><option value="visible">正常列表</option><option value="hidden">已隐藏</option></select></label>
-            <input type="text" class="input" id="session-query" placeholder="全文搜索 (标题 / cwd / 对话内容 / session-id)" />
-          </div>
-          <p id="session-notice" class="session-notice hidden" role="status" aria-live="polite"></p>
-          <div class="table-scroll">
-            <table class="list" id="session-table">
-              <thead>
-                <tr>
-                  <th class="session-marks-heading">标记</th><th>相对时间</th><th>时间</th><th>项目</th><th>标题 / SID</th><th>cwd</th><th>SID 短哈希</th>
-                </tr>
-              </thead>
-              <tbody></tbody>
-            </table>
-          </div>
-          <div class="pagination" id="session-pagination">
-            <span class="pagination-info" id="session-pagination-info">第 0-0 条 / 共 0 条</span>
-            <div class="pagination-right">
-              <label class="pagination-size">
-                每页
-                <select id="session-page-size">
-                  <option value="10">10</option>
-                  <option value="20" selected>20</option>
-                  <option value="50">50</option>
-                </select>
-              </label>
-              <div class="pagination-pages" id="session-pagination-pages"></div>
+
+          <button class="btn ghost" id="btn-refresh"
+                  aria-label="重新读取本地 registry 与 snapshot"
+                  title="重新读取本地 registry + snapshot（不触发跨机 push / pull）" data-i18n-title="重新读取本地 registry + snapshot（不触发跨机 push / pull）" data-i18n-aria-label="重新读取本地 registry 与 snapshot">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 8a9 9 0 1 0 1 8M20 2v6h-6"/></svg>
+            <span data-i18n="重新读取">重新读取</span>
+          </button>
+          <button class="btn primary" id="btn-sync"
+                  aria-label="立即触发全量跨机同步"
+                  title="立即触发全量采集 + push + pull（网络操作，可能耗时 3-10 秒）" data-i18n-title="立即触发全量采集 + push + pull（网络操作，可能耗时 3-10 秒）" data-i18n-aria-label="立即触发全量跨机同步">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 7a9 9 0 0 0-15-2L2 8h7M2 2v6M4 17a9 9 0 0 0 15 2l3-3h-7M22 22v-6"/></svg>
+            <span data-i18n="手动同步">手动同步</span>
+          </button>
+        </div>
+      </header>
+
+      <!-- 主工作区卡片面板容器 -->
+      <main class="workspace">
+        <!-- 1. Session Board (Master-Detail 双栏切分架构) -->
+        <section id="page-sessions" class="page page-view">
+          <div class="split-view">
+            <!-- 左栏 Master：会话来源分类、过滤与卡片流 -->
+            <div class="master-pane">
+              <div class="pane-toolbar">
+                <div class="session-source-strip">
+                  <button id="session-source-previous" class="session-source-scroll" type="button" aria-label="向左滚动工具来源" title="向左滚动工具来源" data-i18n-title="向左滚动工具来源" data-i18n-aria-label="向左滚动工具来源">‹</button>
+                <div class="session-source-tabs" role="tablist" aria-label="会话来源" data-i18n-aria-label="会话来源">
+                  <button class="session-source-tab active" type="button" role="tab"
+                          id="session-source-tab-claude" data-session-source="claude-cli"
+                          aria-selected="true" aria-controls="session-source-panel" tabindex="0">
+                    Claude Code
+                  </button>
+                  <button class="session-source-tab" type="button" role="tab"
+                          id="session-source-tab-codex" data-session-source="codex"
+                          aria-selected="false" aria-controls="session-source-panel" tabindex="-1">
+                    Codex
+                  </button>
+                  <button class="session-source-tab" type="button" role="tab"
+                          id="session-source-tab-pi" data-session-source="pi"
+                          aria-selected="false" aria-controls="session-source-panel" tabindex="-1">
+                    pi
+                  </button>
+                  <button class="session-source-tab" type="button" role="tab"
+                          id="session-source-tab-grok" data-session-source="grok"
+                          aria-selected="false" aria-controls="session-source-panel" tabindex="-1">
+                    Grok
+                  </button>
+                  <button class="session-source-tab" type="button" role="tab" id="session-source-tab-opencode" data-session-source="opencode"
+                          aria-selected="false" aria-controls="session-source-panel" tabindex="-1">OpenCode</button>
+                  <button class="session-source-tab" type="button" role="tab" id="session-source-tab-antigravity" data-session-source="antigravity"
+                          aria-selected="false" aria-controls="session-source-panel" tabindex="-1">Antigravity CLI</button>
+                  <button class="session-source-tab" type="button" role="tab" id="session-source-tab-dsh" data-session-source="dsh"
+                          aria-selected="false" aria-controls="session-source-panel" tabindex="-1">DSH</button>
+                  <button class="session-source-tab" type="button" role="tab" id="session-source-tab-zcode" data-session-source="zcode"
+                          aria-selected="false" aria-controls="session-source-panel" tabindex="-1">ZCode</button>
+                  <button class="session-source-tab" type="button" role="tab" id="session-source-tab-gemini-cli" data-session-source="gemini-cli"
+                          aria-selected="false" aria-controls="session-source-panel" tabindex="-1">Gemini CLI</button>
+                </div>
+                  <button id="session-source-next" class="session-source-scroll" type="button" aria-label="向右滚动工具来源" title="向右滚动工具来源" data-i18n-title="向右滚动工具来源" data-i18n-aria-label="向右滚动工具来源">›</button>
+                  <button id="session-source-manage" class="session-source-manage" type="button" aria-label="管理来源 Tab" title="管理来源 Tab" aria-haspopup="dialog" data-i18n-title="管理来源 Tab" data-i18n-aria-label="管理来源 Tab">
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M4 7h9m4 0h3M4 17h3m4 0h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg>
+                  </button>
+                </div>
+                <p id="session-source-hint" class="session-source-hint hidden" role="status"></p>
+
+                <div id="session-source-panel" role="tabpanel" aria-labelledby="session-source-tab-claude" style="display:flex;flex-direction:column;gap:8px;">
+                  <div class="filter-row toolbar">
+                    <label class="session-visibility-control">
+                      <select class="input select" id="session-visibility" aria-label="会话显示范围" data-i18n-aria-label="会话显示范围">
+                        <option value="visible" data-i18n="正常列表">正常列表</option>
+                        <option value="hidden" data-i18n="已隐藏">已隐藏</option>
+                      </select>
+                    </label>
+                    <input type="text" class="input" id="session-query" placeholder="全文搜索 (标题 / cwd / 对话内容 / session-id)"  data-i18n-placeholder="全文搜索 (标题 / cwd / 对话内容 / session-id)"/>
+                  </div>
+                  <p id="session-notice" class="session-notice hidden" role="status" aria-live="polite"></p>
+                </div>
+              </div>
+
+              <!-- 会话卡片列表容器 -->
+              <div class="table-scroll session-list" id="session-table-scroll">
+                <table class="list session-table-cards" id="session-table">
+                  <thead>
+                    <tr>
+                      <th class="session-marks-heading" data-i18n="标记">标记</th><th data-i18n="相对时间">相对时间</th><th data-i18n="时间">时间</th><th data-i18n="项目">项目</th><th data-i18n="标题 / SID">标题 / SID</th><th>cwd</th><th data-i18n="SID 短哈希">SID 短哈希</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+
+              <!-- 底部悬浮分页条 -->
+              <div class="pagination pane-footer" id="session-pagination">
+                <span class="pagination-info" id="session-pagination-info" data-i18n="第 0-0 条 / 共 0 条">第 0-0 条 / 共 0 条</span>
+                <div class="pagination-right">
+                  <label class="pagination-size" style="display:inline-flex;align-items:center;gap:6px;">
+                    <span data-i18n="每页">每页</span>
+                    <select id="session-page-size" class="select" style="height:26px;padding:0 8px;font-size:11.5px;width:auto;">
+                      <option value="10">10</option>
+                      <option value="20" selected>20</option>
+                      <option value="50">50</option>
+                    </select>
+                  </label>
+                  <div class="pagination-pages pg-btns" id="session-pagination-pages"></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 右栏 Inspector：方案 D 立体检查器 -->
+            <div class="inspector-pane" id="session-inspector">
+              <div class="empty-state" style="padding:40px 20px;text-align:center;color:var(--text-mute);">
+                <div style="font-size:14px;font-weight:600;margin-bottom:6px;color:var(--text-0);" data-i18n="未选择会话">未选择会话</div>
+                <div style="font-size:12px;" data-i18n="点击左侧会话查看恢复命令、改动文件与近期对话">点击左侧会话查看恢复命令、改动文件与近期对话</div>
+              </div>
             </div>
           </div>
-          </div>
-        </div>
-      </section>
+        </section>
 
-      <!-- Fleet Board -->
-      <section id="page-fleet" class="page hidden">
-        <h2 class="page-title">Fleet Board · 跨机项目状态</h2>
-        <div id="fleet-banners"></div>
-        <div class="card">
-          <div class="table-scroll">
-            <table class="list" id="fleet-table">
-              <thead>
-                <tr>
-                  <th>项目</th><th>各机分支</th><th>各机 HEAD</th><th>未提交改动</th><th>判定</th>
-                </tr>
-              </thead>
-              <tbody></tbody>
-            </table>
-          </div>
-        </div>
-      </section>
-
-      <!-- 项目管理 -->
-      <section id="page-projects" class="page hidden">
-        <h2 class="page-title">项目管理</h2>
-        <div class="card">
-          <div class="toolbar">
-            <input type="text" class="input" id="project-query" placeholder="搜索项目名 / git 地址" />
-            <button class="btn primary" id="btn-add-project">新增项目</button>
-          </div>
-          <div class="table-scroll">
-            <table class="list" id="project-table">
-              <thead>
-                <tr>
-                  <th>项目名</th><th>git 地址</th><th>Win 路径</th><th>Mac 路径</th><th>sync</th><th style="width:200px;">操作</th>
-                </tr>
-              </thead>
-              <tbody></tbody>
-            </table>
-          </div>
-        </div>
-      </section>
-
-      <!-- 代码知识（RepoWiki 只读浏览器） -->
-      <section id="page-repowiki" class="page hidden">
-        <h2 class="page-title">代码知识 · RepoWiki</h2>
-        <div class="card repowiki-project-bar">
-          <div class="toolbar repowiki-toolbar">
-            <label for="repowiki-project-select">已登记项目</label>
-            <select class="input" id="repowiki-project-select" aria-label="选择已登记项目"></select>
-            <button class="btn ghost" id="btn-repowiki-refresh" type="button">重新读取</button>
-          </div>
-          <div class="hint">只读本机已登记项目；不会生成/更新 Wiki、构建图谱、调用模型或后台扫描。</div>
-        </div>
-
-        <div id="repowiki-notice" aria-live="polite"></div>
-
-        <div class="repowiki-summary" id="repowiki-summary" aria-label="RepoWiki 当前状态">
-          <div class="card repowiki-metric"><span>当前分支</span><strong id="repowiki-branch">—</strong></div>
-          <div class="card repowiki-metric"><span>Wiki 代次</span><strong id="repowiki-generation">—</strong><small id="repowiki-wiki-state">状态：—</small><small id="repowiki-generation-time">生成时间：当前契约未提供</small></div>
-          <div class="card repowiki-metric"><span>本地图谱</span><strong id="repowiki-graph-state">—</strong><small id="repowiki-graph-generation">代次：—</small></div>
-          <div class="card repowiki-metric"><span>页面审查</span><strong id="repowiki-review-total">—</strong><small id="repowiki-review-detail">—</small></div>
-        </div>
-
-        <div class="repowiki-reader-grid">
-          <nav class="card repowiki-page-nav" aria-label="RepoWiki 页面导航">
-            <div class="repowiki-panel-title">Wiki 导航</div>
-            <div id="repowiki-page-nav"></div>
-          </nav>
-          <article class="card repowiki-article" id="repowiki-article" aria-live="polite">
-            <div class="empty-state compact">
-              <div class="empty-title">请选择一个项目</div>
-              <div class="empty-hint">页面只会在进入本页或你点击导航时读取。</div>
+        <!-- 2. Fleet Board (跨机集群多机矩阵) -->
+        <section id="page-fleet" class="page page-view hidden">
+          <div class="fleet-split">
+            <div class="fleet-main">
+              <div class="fleet-top">
+                <div id="fleet-banners"></div>
+              </div>
+              <div class="table-scroll" style="flex:1;overflow-y:auto;padding:12px 16px;">
+                <table class="list fleet-table-cards" id="fleet-table">
+                  <thead>
+                    <tr>
+                      <th data-i18n="项目">项目</th><th data-i18n="各机分支">各机分支</th><th data-i18n="各机 HEAD">各机 HEAD</th><th data-i18n="未提交改动">未提交改动</th><th data-i18n="判定">判定</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
             </div>
-          </article>
-        </div>
-
-        <div class="card repowiki-graph-panel">
-          <div class="repowiki-panel-title">确定性代码图查询</div>
-          <form class="toolbar repowiki-graph-search" id="repowiki-graph-search-form">
-            <input class="input" id="repowiki-graph-query" type="search" maxlength="512" autocomplete="off" placeholder="输入函数名、类名或项目相对路径" />
-            <button class="btn primary" type="submit" id="btn-repowiki-graph-search">搜索</button>
-          </form>
-          <div class="hint">搜索后可对返回节点执行固定的详情、调用者、被调用者和影响面查询；不接受 SQL/Cypher 或任意命令。</div>
-          <div id="repowiki-graph-results" class="repowiki-graph-results" aria-live="polite">
-            <div class="empty-state compact"><div class="empty-title">尚未查询</div><div class="empty-hint">图查询只在提交搜索或点击节点操作时执行。</div></div>
-          </div>
-        </div>
-      </section>
-
-      <!-- 设置 -->
-      <section id="page-settings" class="page hidden">
-        <h2 class="page-title">设置</h2>
-        <div class="card">
-          <div class="form-row">
-            <label><input type="checkbox" id="in-diag" /> 诊断模式（详细日志）</label>
-          </div>
-          <div class="form-row">
-            <label for="in-state-remote">存储仓（dashboard-state）远端地址</label>
-            <input type="text" class="input" id="in-state-remote" autocomplete="off" placeholder="git@host:group/dashboard-state.git 或 https://host/group/dashboard-state.git" />
-            <div class="hint">保存后自动 clone / pull。存原始地址（保留 git@ / .git / 端口 / 大小写）；禁内嵌 token；留空 = 清除配置。</div>
-          </div>
-          <div class="form-row">
-            <label for="in-state-root">数据目录（dashboard-state 本地根，可留空用默认）</label>
-            <input type="text" class="input" id="in-state-root" autocomplete="off" placeholder="留空 = ~/.project-dashboard/dashboard-state-clone" />
-            <div class="hint">存储仓 clone 与 backups 的落地位置。改此项 = 换数据目录，保存后新目录会重新 clone。</div>
-            <div class="toolbar">
-              <button class="btn ghost" id="btn-open-data-dir" type="button"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8a3 3 0 0 1 3-3h3l3 3h6a3 3 0 0 1 3 3v7a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3z"/><path d="M8 13h8"/></svg>打开同步数据目录</button>
-              <button class="btn ghost" id="btn-open-session-data-dir" type="button"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8a3 3 0 0 1 3-3h3l3 3h6a3 3 0 0 1 3 3v7a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3z"/><path d="M8 13h8"/></svg>打开本机会话目录</button>
+            <div class="inspector-pane" id="fleet-inspector">
+              <div class="empty-state" style="padding:40px 20px;text-align:center;color:var(--text-mute);">
+                <div style="font-size:14px;font-weight:600;margin-bottom:6px;color:var(--text-0);" data-i18n="未选择项目">未选择项目</div>
+                <div style="font-size:12px;" data-i18n="点击左侧项目卡片查看多机提交流与同步详情">点击左侧项目卡片查看多机提交流与同步详情</div>
+              </div>
             </div>
           </div>
-          <div class="form-row">
-            <label for="in-repowiki-cli">RepoWiki CLI 绝对路径</label>
-            <input type="text" class="input" id="in-repowiki-cli" autocomplete="off" placeholder="/absolute/path/to/repowiki" />
-            <div class="hint">仅保存在本机 local.yaml；Dashboard 不搜索 PATH、不安装 CLI，也不会自动运行它。</div>
-          </div>
-          <div class="form-row">
-            <label for="in-repowiki-data-root">RepoWiki data root 绝对路径</label>
-            <input type="text" class="input" id="in-repowiki-data-root" autocomplete="off" placeholder="/absolute/path/to/repowiki-data" />
-            <div class="hint">仅定位本机派生图谱；不会写入 dashboard-state、项目 registry 或跨机同步。</div>
-          </div>
-          <div class="toolbar">
-            <button class="btn primary" id="btn-save-repowiki-settings">保存 RepoWiki 本机路径</button>
-          </div>
-          <div class="toolbar">
-            <button class="btn primary" id="btn-save-settings">保存常规设置</button>
-          </div>
-          <div class="hint" id="settings-sync-status"></div>
+        </section>
 
-          <!-- 本机身份 / 旧身份认领。手动触发，不做启动自动迁移（两台机同时启动会抢改同一份 yaml）。 -->
-          <div class="form-row">
-            <label>本机身份</label>
-            <dl class="machine-fields" id="identity-fields"></dl>
-            <div class="hint">machine_id 由硬件标识决定，主机名变了它也不变。主机名仅作展示，其漂移轨迹会被记下来便于排查。</div>
-            <div class="toolbar">
-              <button class="btn ghost" id="btn-plan-identity-migration" type="button">检查旧身份（只读，不改数据）</button>
-              <button class="btn primary" id="btn-apply-identity-migration" type="button" style="display:none">执行迁移</button>
+        <!-- 3. 项目管理 -->
+        <section id="page-projects" class="page page-view hidden">
+          <div class="single-page" style="padding:16px 20px;overflow-y:auto;height:100%;">
+            <div class="card" style="padding:16px 20px;background:var(--bg-1);border:1px solid var(--border);border-radius:var(--radius-lg,16px);box-shadow:var(--shadow-pane);">
+              <div class="toolbar" style="margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;">
+                <input type="text" class="input" id="project-query" placeholder="搜索项目名 / git 地址" style="width:320px;"  data-i18n-placeholder="搜索项目名 / git 地址"/>
+                <button class="btn primary" id="btn-add-project" data-i18n="+ 新增项目">+ 新增项目</button>
+              </div>
+              <div class="table-scroll">
+                <table class="list" id="project-table">
+                  <thead>
+                    <tr>
+                      <th data-i18n="项目名">项目名</th><th data-i18n="git 地址">git 地址</th><th data-i18n="Win 路径">Win 路径</th><th data-i18n="Mac 路径">Mac 路径</th><th>sync</th><th style="width:200px;" data-i18n="操作">操作</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
             </div>
-            <div id="identity-migration-plan"></div>
           </div>
-        </div>
-      </section>
-    </main>
+        </section>
 
-    <!-- 侧滑详情 -->
+        <!-- 4. 代码知识（RepoWiki 只读浏览器） -->
+        <section id="page-repowiki" class="page page-view hidden">
+          <div class="rw-shell">
+            <div class="card repowiki-project-bar" style="background:var(--bg-1);border:1px solid var(--border);border-radius:var(--radius-lg,16px);padding:12px 18px;box-shadow:var(--shadow-pane);flex:none;">
+              <div class="toolbar repowiki-toolbar" style="display:flex;align-items:center;gap:10px;">
+                <label for="repowiki-project-select" style="font-weight:600;font-size:12.5px;" data-i18n="已登记项目">已登记项目</label>
+                <select class="input select" id="repowiki-project-select" aria-label="选择已登记项目" style="min-width:240px;width:auto;" data-i18n-aria-label="选择已登记项目"></select>
+                <button class="btn ghost" id="btn-repowiki-refresh" type="button" data-i18n="重新读取">重新读取</button>
+                <span class="hint" style="margin-left:auto;font-size:11.5px;color:var(--text-mute);" data-i18n="只读本机已登记项目；不调用模型或后台扫描。">只读本机已登记项目；不调用模型或后台扫描。</span>
+              </div>
+            </div>
+
+            <div id="repowiki-notice" aria-live="polite"></div>
+
+            <div class="repowiki-summary" id="repowiki-summary" aria-label="RepoWiki 当前状态" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;flex:none;" data-i18n-aria-label="RepoWiki 当前状态">
+              <div class="card repowiki-metric" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-md,10px);padding:10px 14px;box-shadow:var(--specular);display:flex;flex-direction:column;gap:3px;">
+                <span style="font-size:11px;color:var(--text-mute);" data-i18n="当前分支">当前分支</span>
+                <strong id="repowiki-branch" style="font-size:13.5px;color:var(--text-0);">—</strong>
+              </div>
+              <div class="card repowiki-metric" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-md,10px);padding:10px 14px;box-shadow:var(--specular);display:flex;flex-direction:column;gap:3px;">
+                <span style="font-size:11px;color:var(--text-mute);" data-i18n="Wiki 代次">Wiki 代次</span>
+                <strong id="repowiki-generation" style="font-size:13.5px;color:var(--text-0);">—</strong>
+                <small id="repowiki-wiki-state" style="font-size:10.5px;color:var(--text-mute);" data-i18n="状态：—">状态：—</small>
+                <small id="repowiki-generation-time" style="font-size:10.5px;color:var(--text-mute);display:none;" data-i18n="生成时间：当前契约未提供">生成时间：当前契约未提供</small>
+              </div>
+              <div class="card repowiki-metric" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-md,10px);padding:10px 14px;box-shadow:var(--specular);display:flex;flex-direction:column;gap:3px;">
+                <span style="font-size:11px;color:var(--text-mute);" data-i18n="本地图谱">本地图谱</span>
+                <strong id="repowiki-graph-state" style="font-size:13.5px;color:var(--text-0);">—</strong>
+                <small id="repowiki-graph-generation" style="font-size:10.5px;color:var(--text-mute);" data-i18n="代次：—">代次：—</small>
+              </div>
+              <div class="card repowiki-metric" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-md,10px);padding:10px 14px;box-shadow:var(--specular);display:flex;flex-direction:column;gap:3px;">
+                <span style="font-size:11px;color:var(--text-mute);" data-i18n="页面审查">页面审查</span>
+                <strong id="repowiki-review-total" style="font-size:13.5px;color:var(--text-0);">—</strong>
+                <small id="repowiki-review-detail" style="font-size:10.5px;color:var(--text-mute);">—</small>
+              </div>
+            </div>
+
+            <div class="repowiki-reader-grid">
+              <nav class="card repowiki-page-nav" aria-label="RepoWiki 页面导航" style="background:var(--bg-1);border:1px solid var(--border);border-radius:var(--radius-lg,16px);padding:14px;overflow-y:auto;box-shadow:var(--shadow-pane);" data-i18n-aria-label="RepoWiki 页面导航">
+                <div class="repowiki-nav-tools">
+                  <div class="repowiki-panel-title"><span data-i18n="Wiki 目录树">Wiki 目录树</span> <span id="repowiki-nav-count" aria-live="polite"></span></div>
+                  <div class="repowiki-search-field">
+                    <input class="input" id="repowiki-nav-query" type="search" maxlength="200" autocomplete="off" placeholder="筛选目录标题…" aria-label="筛选目录标题" aria-controls="repowiki-page-nav"  data-i18n-placeholder="筛选目录标题…" data-i18n-aria-label="筛选目录标题"/>
+                    <button class="repowiki-search-button" id="btn-repowiki-nav-clear" type="button" aria-label="清空目录筛选" title="清空目录筛选" disabled data-i18n-title="清空目录筛选" data-i18n-aria-label="清空目录筛选">×</button>
+                  </div>
+                </div>
+                <div id="repowiki-page-nav"></div>
+              </nav>
+              <section class="card repowiki-document-pane" aria-label="Wiki 文档阅读区" data-i18n-aria-label="Wiki 文档阅读区">
+                <div class="repowiki-find-bar" role="search" aria-label="当前文档内查找" data-i18n-aria-label="当前文档内查找">
+                  <div class="repowiki-search-field">
+                    <input class="input" id="repowiki-find-query" type="search" maxlength="200" autocomplete="off" placeholder="当前文档内查找…" aria-label="当前文档内查找" aria-controls="repowiki-article" aria-describedby="repowiki-find-count" disabled  data-i18n-placeholder="当前文档内查找…" data-i18n-aria-label="当前文档内查找"/>
+                  </div>
+                  <span id="repowiki-find-count" class="repowiki-find-count" aria-live="polite" data-i18n="请先打开文档">请先打开文档</span>
+                  <div class="repowiki-find-actions">
+                    <button class="repowiki-search-button" id="btn-repowiki-find-prev" type="button" aria-label="上一处匹配" title="上一处（Shift+Enter）" disabled data-i18n-title="上一处（Shift+Enter）" data-i18n-aria-label="上一处匹配">↑</button>
+                    <button class="repowiki-search-button" id="btn-repowiki-find-next" type="button" aria-label="下一处匹配" title="下一处（Enter）" disabled data-i18n-title="下一处（Enter）" data-i18n-aria-label="下一处匹配">↓</button>
+                    <button class="repowiki-search-button" id="btn-repowiki-find-clear" type="button" aria-label="清空文档查找" title="清空查找（Esc）" disabled data-i18n-title="清空查找（Esc）" data-i18n-aria-label="清空文档查找">×</button>
+                  </div>
+                </div>
+              <article class="repowiki-article" id="repowiki-article" aria-live="polite">
+                <div class="empty-state compact" style="text-align:center;padding:40px 20px;color:var(--text-mute);">
+                  <div class="empty-title" style="font-size:14px;font-weight:600;margin-bottom:6px;color:var(--text-0);" data-i18n="请选择一个项目">请选择一个项目</div>
+                  <div class="empty-hint" style="font-size:12px;" data-i18n="页面只会在进入本页或你点击导航时读取。">页面只会在进入本页或你点击导航时读取。</div>
+                </div>
+              </article>
+              </section>
+            </div>
+
+            <div class="card repowiki-graph-panel" style="background:var(--bg-1);border:1px solid var(--border);border-radius:var(--radius-lg,16px);padding:14px 18px;box-shadow:var(--shadow-pane);flex:none;">
+              <div class="repowiki-panel-title" style="font-size:12px;font-weight:700;color:var(--text-mute);text-transform:uppercase;margin-bottom:8px;letter-spacing:0.04em;" data-i18n="确定性图谱查询">确定性图谱查询</div>
+              <form class="toolbar repowiki-graph-search" id="repowiki-graph-search-form" style="display:flex;gap:8px;align-items:center;">
+                <input class="input" id="repowiki-graph-query" type="search" maxlength="512" autocomplete="off" placeholder="按符号名、类名、函数名或相对路径检索图谱" style="flex:1;"  data-i18n-placeholder="按符号名、类名、函数名或相对路径检索图谱"/>
+                <button class="btn primary" type="submit" id="btn-repowiki-graph-search" data-i18n="搜索">搜索</button>
+              </form>
+              <div class="hint" style="font-size:11px;color:var(--text-mute);margin-top:4px;" data-i18n="按代码实体精准定位上下文（包含调用方、被调用方与影响面分析）。只读本地图谱，不执行任意 SQL/Cypher。">按代码实体精准定位上下文（包含调用方、被调用方与影响面分析）。只读本地图谱，不执行任意 SQL/Cypher。</div>
+              <div id="repowiki-graph-results" class="repowiki-graph-results" aria-live="polite" style="margin-top:10px;">
+                <div class="empty-state compact"><div class="empty-title" style="font-size:12.5px;color:var(--text-mute);" data-i18n="在上方输入代码符号并点击搜索查看图谱节点详情。">在上方输入代码符号并点击搜索查看图谱节点详情。</div></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 5. 设置 -->
+        <section id="page-settings" class="page page-view hidden">
+          <div class="single-page" style="padding:16px 20px;overflow-y:auto;height:100%;">
+            <div class="settings-grid" style="display:flex;flex-direction:column;gap:16px;max-width:820px;">
+              <div class="set-card language-settings-card">
+                <div><h3 id="ui-language-heading" data-i18n="界面语言">界面语言</h3><p class="hint" data-i18n="立即生效，仅保存在本机。">立即生效，仅保存在本机。</p><p id="ui-language-notice" class="hint" role="status" aria-live="polite"></p></div>
+                <select id="ui-language" class="input select" aria-labelledby="ui-language-heading"><option value="zh-CN">简体中文</option><option value="en">English</option></select>
+              </div>
+              <!-- 方案 D 专属：4 套精选高定单色阶配色卡片 -->
+              <div class="set-card theme-palette-card" style="background:var(--bg-1);border:1px solid var(--border);border-radius:var(--radius-lg,16px);padding:20px 24px;box-shadow:var(--shadow-pane);">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                  <h3 style="font-size:15px;font-weight:700;color:var(--text-0);" data-i18n="界面视觉主题 · Spatial Studio 高定单色阶色盘">界面视觉主题 · Spatial Studio 高定单色阶色盘</h3>
+                  <span style="font-size:11px;color:var(--text-mute);" data-i18n="点击即刻切换并持久化保存">点击即刻切换并持久化保存</span>
+                </div>
+                <p class="field-hint" style="margin-bottom:16px;color:var(--text-mute);font-size:12px;line-height:1.5;" data-i18n="方案 D 彻底告别色彩混杂，采用 92% 纯净同色系明度阶梯 + 8% 单一精准强调色。默认推荐【曜石翡翠】高饱和青绿。">方案 D 彻底告别色彩混杂，采用 92% 纯净同色系明度阶梯 + 8% 单一精准强调色。默认推荐【曜石翡翠】高饱和青绿。</p>
+                <div class="palette-picker-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;">
+                  <button type="button" class="palette-option active" data-palette-option="obsidian" aria-pressed="true">
+                    <span style="display:flex;align-items:center;gap:10px;">
+                      <span class="palette-swatch" style="width:18px;height:18px;border-radius:99px;background:#10b981;box-shadow:0 0 10px rgba(16,185,129,0.35);"></span>
+                      <strong style="font-size:13px;color:var(--text-0);" data-i18n="曜石翡翠">曜石翡翠</strong>
+                    </span>
+                    <span style="font-size:11.5px;color:var(--text-mute);" data-i18n="深黑底噪 + 翡翠青绿（默认沉稳护眼）">深黑底噪 + 翡翠青绿（默认沉稳护眼）</span>
+                  </button>
+                  <button type="button" class="palette-option" data-palette-option="alabaster" aria-pressed="false">
+                    <span style="display:flex;align-items:center;gap:10px;">
+                      <span class="palette-swatch" style="width:18px;height:18px;border-radius:99px;background:#f5f5f4;border:1.5px solid #71717a;"></span>
+                      <strong style="font-size:13px;color:var(--text-0);" data-i18n="宣纸水墨">宣纸水墨</strong>
+                    </span>
+                    <span style="font-size:11.5px;color:var(--text-mute);" data-i18n="高定暖白 + 炭黑水墨（Apple Studio 浅色质感）">高定暖白 + 炭黑水墨（Apple Studio 浅色质感）</span>
+                  </button>
+                  <button type="button" class="palette-option" data-palette-option="nord" aria-pressed="false">
+                    <span style="display:flex;align-items:center;gap:10px;">
+                      <span class="palette-swatch" style="width:18px;height:18px;border-radius:99px;background:#38bdf8;box-shadow:0 0 10px rgba(56,189,248,0.35);"></span>
+                      <strong style="font-size:13px;color:var(--text-0);" data-i18n="钛金冰蓝">钛金冰蓝</strong>
+                    </span>
+                    <span style="font-size:11.5px;color:var(--text-mute);" data-i18n="钛金深灰 + 冰川冰蓝（冷冽北欧工程感）">钛金深灰 + 冰川冰蓝（冷冽北欧工程感）</span>
+                  </button>
+                  <button type="button" class="palette-option" data-palette-option="graphite" aria-pressed="false">
+                    <span style="display:flex;align-items:center;gap:10px;">
+                      <span class="palette-swatch" style="width:18px;height:18px;border-radius:99px;background:#e4e4e7;border:1px solid #52525b;"></span>
+                      <strong style="font-size:13px;color:var(--text-0);" data-i18n="纯粹黑白灰">纯粹黑白灰</strong>
+                    </span>
+                    <span style="font-size:11.5px;color:var(--text-mute);" data-i18n="零色彩干扰极简纯粹阶梯（Vercel 级清爽）">零色彩干扰极简纯粹阶梯（Vercel 级清爽）</span>
+                  </button>
+                </div>
+              </div>
+
+              <div class="set-card session-source-settings-card">
+                <div><h3 data-i18n="会话来源 Tab">会话来源 Tab</h3><p class="hint" id="session-source-settings-summary" data-i18n="已显示 9 / 9 个工具来源">已显示 9 / 9 个工具来源</p><p class="hint" data-i18n="选择常用工具并调整顺序，保存后在本机记住。">选择常用工具并调整顺序，保存后在本机记住。</p></div>
+                <button type="button" class="btn ghost" id="btn-manage-session-sources" aria-haspopup="dialog" data-i18n="管理来源 Tab">管理来源 Tab</button>
+              </div>
+
+              <!-- 存储仓与跨机同步 -->
+              <div class="set-card" style="background:var(--bg-1);border:1px solid var(--border);border-radius:var(--radius-lg,16px);padding:20px 24px;box-shadow:var(--shadow-pane);">
+                <h3 style="font-size:14.5px;font-weight:700;color:var(--text-0);margin-bottom:12px;" data-i18n="存储仓与跨机同步 (dashboard-state)">存储仓与跨机同步 (dashboard-state)</h3>
+                <div class="form-row" style="margin-bottom:12px;">
+                  <label for="in-state-remote" style="font-size:12px;color:var(--text-1);font-weight:600;" data-i18n="存储仓远端 Git 地址">存储仓远端 Git 地址</label>
+                  <input type="text" class="input" id="in-state-remote" placeholder="git@github.com:owner/dashboard-state.git" />
+                  <div class="hint" style="font-size:11px;color:var(--text-mute);margin-top:4px;" data-i18n="⚠️ 保存后自动 clone / pull。请保留原始 SSH/HTTPS 地址，严禁内嵌 Token。">⚠️ 保存后自动 clone / pull。请保留原始 SSH/HTTPS 地址，严禁内嵌 Token。</div>
+                </div>
+                <div class="form-row" style="margin-bottom:12px;">
+                  <label for="in-state-root" style="font-size:12px;color:var(--text-1);font-weight:600;" data-i18n="本地数据根目录">本地数据根目录</label>
+                  <input type="text" class="input" id="in-state-root" placeholder="~/.project-dashboard/dashboard-state-clone" />
+                </div>
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px;">
+                  <label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--text-1);cursor:pointer;">
+                    <input type="checkbox" id="in-diag" /> <span data-i18n="开启诊断模式（详细同步日志）">开启诊断模式（详细同步日志）</span>
+                  </label>
+                  <button type="button" class="btn primary" id="btn-save-settings" data-i18n="保存常规设置">保存常规设置</button>
+                </div>
+              </div>
+
+              <div class="toolbar settings-tools">
+                <button class="btn ghost" id="btn-open-data-dir" type="button" data-i18n="打开同步数据目录">打开同步数据目录</button>
+                <button class="btn ghost" id="btn-open-session-data-dir" type="button" data-i18n="打开本机会话目录">打开本机会话目录</button>
+              </div>
+              <div class="hint" id="settings-sync-status" role="status"></div>
+              <!-- RepoWiki 本机引擎路径 -->
+              <div class="set-card" style="background:var(--bg-1);border:1px solid var(--border);border-radius:var(--radius-lg,16px);padding:20px 24px;box-shadow:var(--shadow-pane);">
+                <h3 style="font-size:14.5px;font-weight:700;color:var(--text-0);margin-bottom:12px;" data-i18n="RepoWiki 本机引擎路径（仅存于 local.yaml，不出机）">RepoWiki 本机引擎路径（仅存于 local.yaml，不出机）</h3>
+                <div class="form-row" style="margin-bottom:12px;">
+                  <label for="in-repowiki-cli" style="font-size:12px;color:var(--text-1);font-weight:600;" data-i18n="RepoWiki CLI 绝对路径">RepoWiki CLI 绝对路径</label>
+                  <input type="text" class="input" id="in-repowiki-cli" placeholder="例如 F:\repowiki\target\release\repowiki.exe"  data-i18n-placeholder="例如 F:\repowiki\target\release\repowiki.exe"/>
+                </div>
+                <div class="form-row" style="margin-bottom:12px;">
+                  <label for="in-repowiki-data-root" style="font-size:12px;color:var(--text-1);font-weight:600;" data-i18n="RepoWiki Data Root 绝对路径">RepoWiki Data Root 绝对路径</label>
+                  <input type="text" class="input" id="in-repowiki-data-root" placeholder="例如 F:\repowiki-data"  data-i18n-placeholder="例如 F:\repowiki-data"/>
+                </div>
+              </div>
+
+              <div class="toolbar">
+                <button type="button" class="btn primary" id="btn-save-repowiki-settings" data-i18n="保存 RepoWiki 本机路径">保存 RepoWiki 本机路径</button>
+              </div>
+              <!-- 本机硬件身份与旧身份认领向导 -->
+              <div class="set-card" style="background:var(--bg-1);border:1px solid var(--border);border-radius:var(--radius-lg,16px);padding:20px 24px;box-shadow:var(--shadow-pane);">
+                <h3 style="font-size:14.5px;font-weight:700;color:var(--text-0);margin-bottom:12px;" data-i18n="本机硬件身份与旧身份认领向导">本机硬件身份与旧身份认领向导</h3>
+                <dl class="machine-fields" id="identity-fields"></dl>
+                <div style="display:flex;gap:10px;">
+                  <button type="button" class="btn ghost" id="btn-plan-identity-migration" data-i18n="检查旧身份（只读干跑，不改数据）">检查旧身份（只读干跑，不改数据）</button>
+                  <button type="button" class="btn primary" id="btn-apply-identity-migration" style="display:none;" data-i18n="执行迁移">执行迁移</button>
+                </div>
+                <div id="identity-migration-plan" style="margin-top:12px;"></div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <!-- 侧滑详情抽屉（保持兼容与全屏查阅） -->
     <aside class="drawer" id="drawer" aria-hidden="true">
-      <div class="drawer-resizer" id="drawer-resizer" title="拖拽调整宽度"></div>
+      <div class="drawer-resizer" id="drawer-resizer" title="拖拽调整宽度" data-i18n-title="拖拽调整宽度"></div>
       <header class="drawer-head">
-        <strong id="drawer-title">详情</strong>
-        <button class="btn ghost" id="drawer-close" title="关闭 (Esc)" aria-label="关闭详情"><span class="visually-hidden">关闭</span></button>
+        <strong id="drawer-title" data-i18n="详情">详情</strong>
+        <button class="btn ghost" id="drawer-close" title="关闭 (Esc)" aria-label="关闭详情" data-i18n-title="关闭 (Esc)" data-i18n-aria-label="关闭详情"><span class="visually-hidden" data-i18n="关闭">关闭</span></button>
       </header>
       <div class="drawer-extras" id="drawer-extras"></div>
       <div class="drawer-scroll" id="drawer-body"></div>
@@ -280,70 +460,98 @@
     <!-- 项目 CRUD 弹框 -->
     <div class="modal-backdrop" id="project-modal-backdrop">
       <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
-        <h3 id="modal-title">新增项目</h3>
+        <h3 id="modal-title" data-i18n="新增项目">新增项目</h3>
         <form id="project-form">
           <div class="form-row">
-            <label for="f-name">项目名</label>
+            <label for="f-name" data-i18n="项目名">项目名</label>
             <input type="text" class="input" id="f-name" required />
           </div>
           <div class="form-row">
-            <label for="f-git">git 地址</label>
+            <label for="f-git" data-i18n="git 地址">git 地址</label>
             <input type="text" class="input" id="f-git" required placeholder="https://github.com/owner/repo" />
-            <div class="hint">⚠️ 别填含密钥/token 的路径 —— sync:true 会 push 到 dashboard-state 私有仓</div>
-            <div class="hint" id="git-bb-hint" style="display:none;color:var(--warn,#c80);">💡 检测到 Bitbucket web 地址，建议改填 clone 形式 URL（<code>/scm/PROJ/REPO.git</code>，仓库 Clone 按钮可复制），以便跨机与采集防伪对齐</div>
+            <div class="hint" data-i18n="⚠️ 别填含密钥/token 的路径 —— sync:true 会 push 到 dashboard-state 私有仓">⚠️ 别填含密钥/token 的路径 —— sync:true 会 push 到 dashboard-state 私有仓</div>
+            <div class="hint" id="git-bb-hint" style="display:none;color:var(--warn,#c80);"><span data-i18n="💡 检测到 Bitbucket web 地址，建议改填 clone 形式 URL（">💡 检测到 Bitbucket web 地址，建议改填 clone 形式 URL（</span><code>/scm/PROJ/REPO.git</code><span data-i18n="，仓库 Clone 按钮可复制），以便跨机与采集防伪对齐">，仓库 Clone 按钮可复制），以便跨机与采集防伪对齐</span></div>
           </div>
           <div class="form-row">
-            <label for="f-win-machine-id">Win 机 machine_id</label>
+            <label for="f-win-machine-id" data-i18n="Win 机 machine_id">Win 机 machine_id</label>
             <select class="input" id="f-win-machine-picker">
-              <option value="">— 从已知机器选择 —</option>
+              <option value="" data-i18n="— 从已知机器选择 —">— 从已知机器选择 —</option>
             </select>
-            <input type="text" class="input" id="f-win-machine-id" placeholder="win-xxxxxxxx（本机自动填）" />
-            <div class="hint">⚠️ 跨机同步用此 id 匹配路径。优先从上方下拉选（显示主机名、存 machine_id）；该机从未同步过时才手填 —— 在那台机上跑 <code>cargo run -p dashboard-core --example hwid_probe</code> 取值</div>
+            <input type="text" class="input" id="f-win-machine-id" placeholder="win-xxxxxxxx（本机自动填）"  data-i18n-placeholder="win-xxxxxxxx（本机自动填）"/>
+            <div class="hint"><span data-i18n="⚠️ 跨机同步用此 id 匹配路径。优先从上方下拉选（显示主机名、存 machine_id）；该机从未同步过时才手填 —— 在那台机上跑">⚠️ 跨机同步用此 id 匹配路径。优先从上方下拉选（显示主机名、存 machine_id）；该机从未同步过时才手填 —— 在那台机上跑</span> <code>cargo run -p dashboard-core --example hwid_probe</code> <span data-i18n="取值">取值</span></div>
           </div>
           <div class="form-row">
-            <label for="f-win-path">Win 路径</label>
+            <label for="f-win-path" data-i18n="Win 路径">Win 路径</label>
             <input type="text" class="input" id="f-win-path" placeholder="F:\\proj" />
-            <div class="hint">⚠️ 建议用 ~/ 或 $HOME/ 相对形式，别带用户名</div>
+            <div class="hint" data-i18n="⚠️ 建议用 ~/ 或 $HOME/ 相对形式，别带用户名">⚠️ 建议用 ~/ 或 $HOME/ 相对形式，别带用户名</div>
           </div>
           <div class="form-row">
-            <label for="f-mac-machine-id">Mac 机 machine_id</label>
+            <label for="f-mac-machine-id" data-i18n="Mac 机 machine_id">Mac 机 machine_id</label>
             <select class="input" id="f-mac-machine-picker">
-              <option value="">— 从已知机器选择 —</option>
+              <option value="" data-i18n="— 从已知机器选择 —">— 从已知机器选择 —</option>
             </select>
-            <input type="text" class="input" id="f-mac-machine-id" placeholder="mbp-xxxxxxxx（本机自动填）" />
-            <div class="hint">⚠️ 跨机同步用此 id 匹配路径。优先从上方下拉选（显示主机名、存 machine_id）；该机从未同步过时才手填 —— 在那台机上跑 <code>cargo run -p dashboard-core --example hwid_probe</code> 取值</div>
+            <input type="text" class="input" id="f-mac-machine-id" placeholder="mbp-xxxxxxxx（本机自动填）"  data-i18n-placeholder="mbp-xxxxxxxx（本机自动填）"/>
+            <div class="hint"><span data-i18n="⚠️ 跨机同步用此 id 匹配路径。优先从上方下拉选（显示主机名、存 machine_id）；该机从未同步过时才手填 —— 在那台机上跑">⚠️ 跨机同步用此 id 匹配路径。优先从上方下拉选（显示主机名、存 machine_id）；该机从未同步过时才手填 —— 在那台机上跑</span> <code>cargo run -p dashboard-core --example hwid_probe</code> <span data-i18n="取值">取值</span></div>
           </div>
           <div class="form-row">
-            <label for="f-mac-path">Mac 路径</label>
+            <label for="f-mac-path" data-i18n="Mac 路径">Mac 路径</label>
             <input type="text" class="input" id="f-mac-path" placeholder="~/code/proj" />
           </div>
           <div class="form-row">
-            <label>
+            <label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;">
               <input type="checkbox" id="f-sync" />
-              跨机同步（勾选后不可改，改状态请删除重建）
+              <span data-i18n="跨机同步（勾选后不可改，改状态请删除重建）">跨机同步（勾选后不可改，改状态请删除重建）</span>
             </label>
           </div>
           <div class="actions">
-            <button type="button" class="btn ghost" id="btn-cancel-project">取消</button>
-            <button type="submit" class="btn primary">保存</button>
+            <button type="button" class="btn ghost" id="btn-cancel-project" data-i18n="取消">取消</button>
+            <button type="submit" class="btn primary" data-i18n="保存">保存</button>
           </div>
         </form>
       </div>
     </div>
 
-    <!-- 通用确认弹窗：Wry 0.55.1 macOS 未实现原生 confirm() 面板（点击哑弹、立即返回 undefined），
-         删除 / 关联 / 双形态三处确认改走本 DOM 弹窗（app.js uiConfirm）。复用 .modal-backdrop 样式。 -->
+    <!-- 通用确认弹窗：Wry 0.55.1 macOS 未实现原生 confirm() 面板，删除/关联/双形态三处确认走本 DOM 弹窗 -->
     <div class="modal-backdrop" id="confirm-backdrop">
       <div class="modal confirm-modal" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-message">
-        <h3 id="confirm-title">请确认</h3>
+        <h3 id="confirm-title" data-i18n="请确认">请确认</h3>
         <p class="confirm-msg" id="confirm-message"></p>
         <div class="actions">
-          <button type="button" class="btn ghost" id="confirm-cancel">取消</button>
-          <button type="button" class="btn primary" id="confirm-ok">确认</button>
+          <button type="button" class="btn ghost" id="confirm-cancel" data-i18n="取消">取消</button>
+          <button type="button" class="btn primary" id="confirm-ok" data-i18n="确认">确认</button>
         </div>
       </div>
     </div>
   </div>
+
+  <section class="appearance-picker" id="appearance-picker" role="dialog" aria-labelledby="appearance-picker-title" hidden>
+    <div class="appearance-picker-heading"><strong id="appearance-picker-title" data-i18n="选择主题">选择主题</strong><span data-i18n="即时生效">即时生效</span></div>
+    <div class="appearance-options" role="group" aria-label="配色方案" data-i18n-aria-label="配色方案">
+      <button type="button" class="appearance-option" data-palette-option="obsidian" aria-pressed="true"><span class="appearance-preview appearance-preview-obsidian" aria-hidden="true"><i></i></span><span data-i18n="曜石翡翠">曜石翡翠</span><small data-i18n="深色">深色</small></button>
+      <button type="button" class="appearance-option" data-palette-option="alabaster" aria-pressed="false"><span class="appearance-preview appearance-preview-alabaster" aria-hidden="true"><i></i></span><span data-i18n="宣纸水墨">宣纸水墨</span><small data-i18n="浅色">浅色</small></button>
+      <button type="button" class="appearance-option" data-palette-option="nord" aria-pressed="false"><span class="appearance-preview appearance-preview-nord" aria-hidden="true"><i></i></span><span data-i18n="钛金冰蓝">钛金冰蓝</span><small data-i18n="深色">深色</small></button>
+      <button type="button" class="appearance-option" data-palette-option="graphite" aria-pressed="false"><span class="appearance-preview appearance-preview-graphite" aria-hidden="true"><i></i></span><span data-i18n="纯黑白灰">纯黑白灰</span><small data-i18n="深色">深色</small></button>
+    </div>
+  </section>
+  <dialog id="session-source-manager" class="session-source-manager" aria-labelledby="session-source-manager-title" aria-describedby="session-source-manager-help">
+    <header class="session-source-manager-head">
+      <div><h3 id="session-source-manager-title" data-i18n="管理来源 Tab">管理来源 Tab</h3><p class="hint" id="session-source-manager-help" data-i18n="勾选要显示的工具，拖动左侧手柄或用上下按钮排序。">勾选要显示的工具，拖动左侧手柄或用上下按钮排序。</p></div>
+      <button class="btn ghost" id="session-source-close" type="button" aria-label="关闭来源管理" data-i18n-aria-label="关闭来源管理">×</button>
+    </header>
+    <ul id="session-source-options" class="session-source-options" aria-label="工具来源与顺序" data-i18n-aria-label="工具来源与顺序"></ul>
+    <footer class="session-source-manager-footer">
+      <p class="hint" id="session-source-selection-status" role="status" aria-live="polite"></p>
+      <p class="session-source-error" id="session-source-error" role="alert"></p>
+      <div class="session-source-manager-actions">
+        <button class="btn ghost" id="session-source-reset" type="button" data-i18n="恢复默认">恢复默认</button>
+        <span></span>
+        <button class="btn ghost" id="session-source-cancel" type="button" data-i18n="取消">取消</button>
+        <button class="btn primary" id="session-source-save" type="button" data-i18n="保存">保存</button>
+      </div>
+    </footer>
+  </dialog>
+  <div class="pd-toast" id="pd-toast"></div>
+
   <script src="./marked.min.js"></script>
   <script src="./app.js"></script>
 </body>
